@@ -2,7 +2,9 @@ package fugue
 
 import (
 	"context"
+	"errors"
 	"iter"
+	"testing"
 )
 
 // fakeAgent is a controllable Agent for tests. Implements Runnable[[]Message, []Message].
@@ -44,4 +46,24 @@ func (f *fakeAgent) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]
 // msg is a tiny helper for building text-only Messages in tests.
 func msg(role Role, text string) Message {
 	return Message{Role: role, Content: []Part{Text{Text: text}}}
+}
+
+func TestStageError_ErrorAndUnwrap(t *testing.T) {
+	underlying := errors.New("provider rejected request")
+	se := &StageError{
+		Index:   2,
+		Err:     underlying,
+		Partial: []Message{msg(RoleUser, "hi")},
+	}
+
+	if got := se.Error(); got != "stage 2: provider rejected request" {
+		t.Errorf("Error() = %q, want %q", got, "stage 2: provider rejected request")
+	}
+	if !errors.Is(se, underlying) {
+		t.Errorf("errors.Is should find the wrapped error")
+	}
+	var asTarget *StageError
+	if !errors.As(se, &asTarget) || asTarget.Index != 2 {
+		t.Errorf("errors.As should recover *StageError with Index=2")
+	}
 }
