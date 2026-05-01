@@ -14,7 +14,7 @@ type StageError struct {
 }
 
 func (e *StageError) Error() string {
-	return fmt.Sprintf("stage %d: %s", e.Index, e.Err.Error())
+	return fmt.Sprintf("stage %d: %v", e.Index, e.Err)
 }
 
 func (e *StageError) Unwrap() error { return e.Err }
