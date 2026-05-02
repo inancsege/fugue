@@ -67,3 +67,18 @@ func TestStageError_ErrorAndUnwrap(t *testing.T) {
 		t.Errorf("errors.As should recover *StageError with Index=2")
 	}
 }
+
+func TestSequential_PanicsOnZeroAgents(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("Sequential() should panic with zero agents")
+		}
+		if _, ok := r.(string); !ok {
+			if _, ok := r.(error); !ok {
+				t.Errorf("panic value should be string or error, got %T", r)
+			}
+		}
+	}()
+	Sequential()
+}
