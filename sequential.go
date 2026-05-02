@@ -57,6 +57,9 @@ func (s *sequential) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[
 				if ev.Done && !isLast {
 					ev.Done = false
 				}
+				// Assumes Event.Delta is cumulative — the last frame holds the
+				// stage's complete output. If providers ever emit per-token
+				// diffs, this becomes `stageOut = append(stageOut, ev.Delta...)`.
 				stageOut = ev.Delta
 				if !yield(ev, nil) {
 					return
