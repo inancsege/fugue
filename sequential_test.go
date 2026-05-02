@@ -222,3 +222,35 @@ func TestSequential_InvokePropagatesContextCancel(t *testing.T) {
 		t.Errorf("StageError.Partial = %v, want %v", se.Partial, wantPartial)
 	}
 }
+
+func TestSequential_StreamSingleAgentForwardsFrames(t *testing.T) {
+	a := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "partial")}, Done: false},
+			{Delta: []Message{msg(RoleAssistant, "final")}, Done: true},
+		},
+	}
+	noop := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: nil, Done: true},
+		},
+	}
+
+	var got []Event[[]Message]
+	for ev, err := range Sequential(a, noop).Stream(context.Background(), []Message{msg(RoleUser, "hi")}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		got = append(got, ev)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("expected 3 frames (a's 2 + noop's 1), got %d: %v", len(got), got)
+	}
+	if got[1].Done {
+		t.Errorf("a's terminal frame should have Done=false, got Done=true")
+	}
+	if !got[2].Done {
+		t.Errorf("final frame should have Done=true, got Done=false")
+	}
+}

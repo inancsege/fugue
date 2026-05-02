@@ -41,5 +41,28 @@ func (s *sequential) Invoke(ctx context.Context, in []Message) ([]Message, error
 }
 
 func (s *sequential) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {
-	return func(yield func(Event[[]Message], error) bool) {}
+	return func(yield func(Event[[]Message], error) bool) {
+		transcript := slices.Clone(in)
+		last := len(s.agents) - 1
+
+		for i, a := range s.agents {
+			var stageOut []Message
+			isLast := i == last
+
+			for ev, err := range a.Stream(ctx, transcript) {
+				if err != nil {
+					yield(Event[[]Message]{}, &StageError{Index: i, Err: err, Partial: transcript})
+					return
+				}
+				if ev.Done && !isLast {
+					ev.Done = false
+				}
+				stageOut = ev.Delta
+				if !yield(ev, nil) {
+					return
+				}
+			}
+			transcript = append(transcript, stageOut...)
+		}
+	}
 }
