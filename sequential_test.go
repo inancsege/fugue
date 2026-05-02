@@ -283,3 +283,50 @@ func TestSequential_StreamThreadsTranscriptAcrossStages(t *testing.T) {
 		t.Errorf("b.seenStreamIn = %v, want %v", b.seenStreamIn, wantB)
 	}
 }
+
+func TestSequential_StreamWrapsStageError(t *testing.T) {
+	boom := errors.New("stream blew up")
+	a := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "from-a")}, Done: true},
+		},
+	}
+	b := &fakeAgent{
+		streamErr: boom,
+	}
+	c := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "from-c")}, Done: true},
+		},
+	}
+
+	in := []Message{msg(RoleUser, "hi")}
+	var sawErr error
+	for _, err := range Sequential(a, b, c).Stream(context.Background(), in) {
+		if err != nil {
+			sawErr = err
+			break
+		}
+	}
+
+	if sawErr == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var se *StageError
+	if !errors.As(sawErr, &se) {
+		t.Fatalf("expected *StageError, got %T: %v", sawErr, sawErr)
+	}
+	if se.Index != 1 {
+		t.Errorf("StageError.Index = %d, want 1", se.Index)
+	}
+	if !errors.Is(se, boom) {
+		t.Errorf("errors.Is should find the underlying error")
+	}
+	wantPartial := []Message{msg(RoleUser, "hi"), msg(RoleAssistant, "from-a")}
+	if !reflect.DeepEqual(se.Partial, wantPartial) {
+		t.Errorf("StageError.Partial = %v, want %v", se.Partial, wantPartial)
+	}
+	if c.seenStreamIn != nil {
+		t.Errorf("agent c was streamed despite earlier failure: seenStreamIn=%v", c.seenStreamIn)
+	}
+}
