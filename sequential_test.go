@@ -254,3 +254,32 @@ func TestSequential_StreamSingleAgentForwardsFrames(t *testing.T) {
 		t.Errorf("final frame should have Done=true, got Done=false")
 	}
 }
+
+func TestSequential_StreamThreadsTranscriptAcrossStages(t *testing.T) {
+	a := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "from-a")}, Done: true},
+		},
+	}
+	b := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "from-b")}, Done: true},
+		},
+	}
+
+	in := []Message{msg(RoleUser, "hi")}
+	for _, err := range Sequential(a, b).Stream(context.Background(), in) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+	}
+
+	wantA := []Message{msg(RoleUser, "hi")}
+	wantB := []Message{msg(RoleUser, "hi"), msg(RoleAssistant, "from-a")}
+	if !reflect.DeepEqual(a.seenStreamIn, wantA) {
+		t.Errorf("a.seenStreamIn = %v, want %v", a.seenStreamIn, wantA)
+	}
+	if !reflect.DeepEqual(b.seenStreamIn, wantB) {
+		t.Errorf("b.seenStreamIn = %v, want %v", b.seenStreamIn, wantB)
+	}
+}
