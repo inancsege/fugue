@@ -330,3 +330,36 @@ func TestSequential_StreamWrapsStageError(t *testing.T) {
 		t.Errorf("agent c was streamed despite earlier failure: seenStreamIn=%v", c.seenStreamIn)
 	}
 }
+
+func TestSequential_StreamStopsOnConsumerCancel(t *testing.T) {
+	a := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "first")}, Done: false},
+			{Delta: []Message{msg(RoleAssistant, "second")}, Done: true},
+		},
+	}
+	b := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: nil, Done: true},
+		},
+	}
+
+	count := 0
+	for ev, err := range Sequential(a, b).Stream(context.Background(), []Message{msg(RoleUser, "hi")}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		_ = ev
+		count++
+		if count == 1 {
+			break
+		}
+	}
+
+	if count != 1 {
+		t.Errorf("expected to consume exactly 1 frame, consumed %d", count)
+	}
+	if b.seenStreamIn != nil {
+		t.Errorf("agent b was streamed despite consumer cancel: seenStreamIn=%v", b.seenStreamIn)
+	}
+}
