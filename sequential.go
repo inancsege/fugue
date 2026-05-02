@@ -29,7 +29,15 @@ type sequential struct {
 }
 
 func (s *sequential) Invoke(ctx context.Context, in []Message) ([]Message, error) {
-	return nil, nil
+	transcript := slices.Clone(in)
+	for i, a := range s.agents {
+		out, err := a.Invoke(ctx, transcript)
+		if err != nil {
+			return nil, &StageError{Index: i, Err: err, Partial: transcript}
+		}
+		transcript = append(transcript, out...)
+	}
+	return transcript, nil
 }
 
 func (s *sequential) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {

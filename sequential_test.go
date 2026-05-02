@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"reflect"
 	"testing"
 )
 
@@ -89,5 +90,40 @@ func TestSequential_SingleAgentIsIdentity(t *testing.T) {
 	// The returned Agent must be a itself, not a one-stage wrapper.
 	if got != Agent(a) {
 		t.Errorf("Sequential(a) should return a directly; got a different Agent")
+	}
+}
+
+func TestSequential_InvokeThreadsTranscript(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-a")}}
+	b := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-b")}}
+	c := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-c")}}
+
+	in := []Message{msg(RoleUser, "hello")}
+	got, err := Sequential(a, b, c).Invoke(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Invoke returned error: %v", err)
+	}
+
+	want := []Message{
+		msg(RoleUser, "hello"),
+		msg(RoleAssistant, "from-a"),
+		msg(RoleAssistant, "from-b"),
+		msg(RoleAssistant, "from-c"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("transcript mismatch\n got: %v\nwant: %v", got, want)
+	}
+
+	wantA := []Message{msg(RoleUser, "hello")}
+	wantB := []Message{msg(RoleUser, "hello"), msg(RoleAssistant, "from-a")}
+	wantC := []Message{msg(RoleUser, "hello"), msg(RoleAssistant, "from-a"), msg(RoleAssistant, "from-b")}
+	if !reflect.DeepEqual(a.seenInvokeIn, wantA) {
+		t.Errorf("a.seenInvokeIn = %v, want %v", a.seenInvokeIn, wantA)
+	}
+	if !reflect.DeepEqual(b.seenInvokeIn, wantB) {
+		t.Errorf("b.seenInvokeIn = %v, want %v", b.seenInvokeIn, wantB)
+	}
+	if !reflect.DeepEqual(c.seenInvokeIn, wantC) {
+		t.Errorf("c.seenInvokeIn = %v, want %v", c.seenInvokeIn, wantC)
 	}
 }
