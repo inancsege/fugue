@@ -3,6 +3,7 @@ package fugue
 import (
 	"context"
 	"iter"
+	"slices"
 )
 
 // Sequential runs agents in order, threading the conversation forward.
@@ -20,7 +21,7 @@ func Sequential(agents ...Agent) Agent {
 	if len(agents) == 1 {
 		return agents[0]
 	}
-	return &sequential{agents: agents}
+	return &sequential{agents: slices.Clone(agents)}
 }
 
 type sequential struct {
