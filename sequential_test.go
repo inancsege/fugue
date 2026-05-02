@@ -82,3 +82,12 @@ func TestSequential_PanicsOnZeroAgents(t *testing.T) {
 	}()
 	Sequential()
 }
+
+func TestSequential_SingleAgentIsIdentity(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "ok")}}
+	got := Sequential(a)
+	// The returned Agent must be a itself, not a one-stage wrapper.
+	if got != Agent(a) {
+		t.Errorf("Sequential(a) should return a directly; got a different Agent")
+	}
+}
