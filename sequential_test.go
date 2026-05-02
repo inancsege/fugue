@@ -177,3 +177,48 @@ func TestSequential_InvokeWrapsStageError(t *testing.T) {
 		t.Errorf("agent c was invoked despite earlier failure: seenInvokeIn=%v", c.seenInvokeIn)
 	}
 }
+
+// agentFunc adapts a function to Agent for tests. Stream is a no-op.
+type agentFunc func(ctx context.Context, in []Message) ([]Message, error)
+
+func (f agentFunc) Invoke(ctx context.Context, in []Message) ([]Message, error) {
+	return f(ctx, in)
+}
+func (f agentFunc) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {
+	return func(yield func(Event[[]Message], error) bool) {}
+}
+
+func TestSequential_InvokePropagatesContextCancel(t *testing.T) {
+	stage0 := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-0")}}
+	stage1 := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-1")}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stage2 := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		cancel()
+		return nil, ctx.Err()
+	})
+
+	in := []Message{msg(RoleUser, "hi")}
+	_, err := Sequential(stage0, stage1, stage2).Invoke(ctx, in)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StageError, got %T: %v", err, err)
+	}
+	if se.Index != 2 {
+		t.Errorf("StageError.Index = %d, want 2", se.Index)
+	}
+	if !errors.Is(se, context.Canceled) {
+		t.Errorf("errors.Is should find context.Canceled, got: %v", se.Err)
+	}
+	wantPartial := []Message{
+		msg(RoleUser, "hi"),
+		msg(RoleAssistant, "from-0"),
+		msg(RoleAssistant, "from-1"),
+	}
+	if !reflect.DeepEqual(se.Partial, wantPartial) {
+		t.Errorf("StageError.Partial = %v, want %v", se.Partial, wantPartial)
+	}
+}
