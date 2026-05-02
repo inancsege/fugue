@@ -141,3 +141,39 @@ func TestSequential_InvokeDoesNotMutateInput(t *testing.T) {
 		t.Errorf("input was mutated\n got: %v\nwant: %v", in, inCopy)
 	}
 }
+
+func TestSequential_InvokeWrapsStageError(t *testing.T) {
+	boom := errors.New("provider blew up")
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-a")}}
+	b := &fakeAgent{invokeErr: boom}
+	c := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-c")}}
+
+	in := []Message{msg(RoleUser, "hi")}
+	got, err := Sequential(a, b, c).Invoke(context.Background(), in)
+	if got != nil {
+		t.Errorf("on error, returned transcript should be nil, got %v", got)
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StageError, got %T: %v", err, err)
+	}
+	if se.Index != 1 {
+		t.Errorf("StageError.Index = %d, want 1", se.Index)
+	}
+	if !errors.Is(se, boom) {
+		t.Errorf("errors.Is should find the underlying error")
+	}
+
+	wantPartial := []Message{msg(RoleUser, "hi"), msg(RoleAssistant, "from-a")}
+	if !reflect.DeepEqual(se.Partial, wantPartial) {
+		t.Errorf("StageError.Partial = %v, want %v", se.Partial, wantPartial)
+	}
+
+	if c.seenInvokeIn != nil {
+		t.Errorf("agent c was invoked despite earlier failure: seenInvokeIn=%v", c.seenInvokeIn)
+	}
+}
