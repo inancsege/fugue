@@ -127,3 +127,17 @@ func TestSequential_InvokeThreadsTranscript(t *testing.T) {
 		t.Errorf("c.seenInvokeIn = %v, want %v", c.seenInvokeIn, wantC)
 	}
 }
+
+func TestSequential_InvokeDoesNotMutateInput(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "out")}}
+	in := []Message{msg(RoleUser, "hi")}
+	inCopy := append([]Message(nil), in...)
+
+	if _, err := Sequential(a, a).Invoke(context.Background(), in); err != nil {
+		t.Fatalf("Invoke error: %v", err)
+	}
+
+	if !reflect.DeepEqual(in, inCopy) {
+		t.Errorf("input was mutated\n got: %v\nwant: %v", in, inCopy)
+	}
+}
