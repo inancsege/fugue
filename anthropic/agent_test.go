@@ -181,3 +181,69 @@ func TestToAPIMessages_EmptyInputErrors(t *testing.T) {
 		t.Fatal("expected error for zero-length input")
 	}
 }
+
+// firstTextOf walks the first text block of a MessageParam.
+func firstTextOf(m sdk.MessageParam) string {
+	for _, b := range m.Content {
+		if b.OfText != nil {
+			return b.OfText.Text
+		}
+	}
+	return ""
+}
+
+func TestToAPIMessages_TextRoundTrip(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleUser, "hello"),
+		msg(fugue.RoleAssistant, "hi back"),
+		msg(fugue.RoleUser, "how are you"),
+	}
+	got, err := toAPIMessages(in)
+	if err != nil {
+		t.Fatalf("toAPIMessages: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 messages, got %d", len(got))
+	}
+	wantRoles := []sdk.MessageParamRole{
+		sdk.MessageParamRoleUser,
+		sdk.MessageParamRoleAssistant,
+		sdk.MessageParamRoleUser,
+	}
+	wantTexts := []string{"hello", "hi back", "how are you"}
+	for i, m := range got {
+		if m.Role != wantRoles[i] {
+			t.Errorf("msg %d role = %q, want %q", i, m.Role, wantRoles[i])
+		}
+		if text := firstTextOf(m); text != wantTexts[i] {
+			t.Errorf("msg %d text = %q, want %q", i, text, wantTexts[i])
+		}
+	}
+}
+
+func TestFromAPIResponse_TextOnly(t *testing.T) {
+	// Build a Message manually. ContentBlockUnion is a flattened union with
+	// Type discriminator + variant fields populated.
+	resp := &sdk.Message{
+		Content: []sdk.ContentBlockUnion{
+			{Type: "text", Text: "hello world"},
+		},
+		StopReason: sdk.StopReasonEndTurn,
+	}
+	got, err := fromAPIResponse(resp)
+	if err != nil {
+		t.Fatalf("fromAPIResponse: %v", err)
+	}
+	if got.Role != fugue.RoleAssistant {
+		t.Errorf("role = %v, want assistant", got.Role)
+	}
+	if len(got.Content) != 1 {
+		t.Fatalf("want 1 content part, got %d", len(got.Content))
+	}
+	if txt, ok := got.Content[0].(fugue.Text); !ok || txt.Text != "hello world" {
+		t.Errorf("content[0] = %v, want Text{hello world}", got.Content[0])
+	}
+	if got.Name != string(sdk.StopReasonEndTurn) {
+		t.Errorf("Name = %q, want %q", got.Name, sdk.StopReasonEndTurn)
+	}
+}
