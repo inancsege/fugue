@@ -2,6 +2,7 @@ package fugue
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -60,6 +61,99 @@ func TestParallel_EachAgentSeesOriginalInput(t *testing.T) {
 		if !reflect.DeepEqual(fa.seenInvokeIn, in) {
 			t.Errorf("agent %s saw %v, want original input %v", name, fa.seenInvokeIn, in)
 		}
+	}
+}
+
+func TestParallel_InvokeWrapsStageError(t *testing.T) {
+	boom := errors.New("provider blew up")
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-a")}}
+	b := &fakeAgent{invokeErr: boom}
+	c := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-c")}}
+
+	in := []Message{msg(RoleUser, "hi")}
+	got, err := Parallel(a, b, c).Invoke(context.Background(), in)
+	if got != nil {
+		t.Errorf("on error, returned transcript should be nil, got %v", got)
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StageError, got %T: %v", err, err)
+	}
+	if se.Index != 1 {
+		t.Errorf("StageError.Index = %d, want 1", se.Index)
+	}
+	if !errors.Is(se, boom) {
+		t.Errorf("errors.Is should find the underlying error")
+	}
+	if !reflect.DeepEqual(se.Partial, in) {
+		t.Errorf("StageError.Partial = %v, want input %v", se.Partial, in)
+	}
+}
+
+func TestParallel_ErrorCancelsSiblingContexts(t *testing.T) {
+	boom := errors.New("explode")
+	var siblingSawCancel bool
+	slow := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		select {
+		case <-time.After(2 * time.Second):
+			return []Message{msg(RoleAssistant, "shouldn't reach")}, nil
+		case <-ctx.Done():
+			siblingSawCancel = true
+			return nil, ctx.Err()
+		}
+	})
+	fast := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		return nil, boom
+	})
+
+	_, err := Parallel(slow, fast).Invoke(context.Background(), []Message{msg(RoleUser, "x")})
+	if err == nil {
+		t.Fatal("expected error from fast stage")
+	}
+	if !siblingSawCancel {
+		t.Error("slow sibling should have observed ctx.Done() after fast failed")
+	}
+}
+
+func TestParallel_InvokePropagatesCallerContextCancel(t *testing.T) {
+	a := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+			return []Message{msg(RoleAssistant, "x")}, nil
+		}
+	})
+	b := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+			return []Message{msg(RoleAssistant, "y")}, nil
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := Parallel(a, b).Invoke(ctx, []Message{msg(RoleUser, "x")})
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StageError, got %T: %v", err, err)
+	}
+	if !errors.Is(se, context.Canceled) {
+		t.Errorf("errors.Is should find context.Canceled, got: %v", se.Err)
 	}
 }
 
