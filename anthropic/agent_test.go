@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -93,4 +94,13 @@ func newAgentWithTransport(model string, ft *fakeTransport, opts ...Option) fugu
 // msg is a tiny helper for building text-only Messages in tests.
 func msg(role fugue.Role, text string) fugue.Message {
 	return fugue.Message{Role: role, Content: []fugue.Part{fugue.Text{Text: text}}}
+}
+
+func TestNew_PanicsOnEmptyModel(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("New(\"\") should panic")
+		}
+	}()
+	New("")
 }
