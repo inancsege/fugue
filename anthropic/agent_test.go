@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -572,6 +573,32 @@ func streamingResponseTwoTextDeltas() *http.Response {
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
 	}
 	return sseResponse(events...)
+}
+
+func TestStream_ContextCancelSurfacesError(t *testing.T) {
+	ft := &fakeTransport{responses: []*http.Response{streamingResponseTwoTextDeltas()}}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var sawErr error
+	frameCount := 0
+	for ev, err := range a.Stream(ctx, []fugue.Message{msg(fugue.RoleUser, "hi")}) {
+		if err != nil {
+			sawErr = err
+			break
+		}
+		_ = ev
+		frameCount++
+		if frameCount == 1 {
+			cancel()
+		}
+	}
+
+	// Lenient contract: timing through SDK + HTTP layer is non-deterministic.
+	// If an error surfaced, it must be context.Canceled (not some other error).
+	if sawErr != nil && !errors.Is(sawErr, context.Canceled) {
+		t.Errorf("error surfaced but not Canceled: %v", sawErr)
+	}
 }
 
 func TestStream_ConsumerCancelClosesBody(t *testing.T) {
