@@ -580,6 +580,7 @@ func TestStream_ContextCancelSurfacesError(t *testing.T) {
 	a := newAgentWithTransport("claude-sonnet-4-6", ft)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var sawErr error
 	frameCount := 0
 	for ev, err := range a.Stream(ctx, []fugue.Message{msg(fugue.RoleUser, "hi")}) {
