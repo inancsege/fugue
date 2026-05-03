@@ -18,3 +18,29 @@ func (e *StageError) Error() string {
 }
 
 func (e *StageError) Unwrap() error { return e.Err }
+
+// RouteError reports a routing-layer failure from a Router combinator.
+//
+// Distinct from *StageError (which is for ordered combinator stages). Routing
+// is dispatch, not a numbered stage — the failing key is more useful than an
+// index.
+//
+// Returned by Router when:
+//   - decide itself returns an error (Key is empty)
+//   - decide returns a key not present in routes (Key is the unknown key)
+//
+// When the chosen agent itself fails, that error passes through bare — it is
+// not wrapped in *RouteError.
+type RouteError struct {
+	Key string // the key returned by decide (empty if decide itself errored)
+	Err error  // the underlying error
+}
+
+func (e *RouteError) Error() string {
+	if e.Key == "" {
+		return fmt.Sprintf("route: %s", e.Err.Error())
+	}
+	return fmt.Sprintf("route %q: %s", e.Key, e.Err.Error())
+}
+
+func (e *RouteError) Unwrap() error { return e.Err }
