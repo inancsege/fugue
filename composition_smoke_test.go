@@ -29,3 +29,31 @@ func TestComposition_SequentialOfParallel(t *testing.T) {
 		t.Errorf("Sequential(a, Parallel(b, c)) duplicated input\n got: %v\nwant: %v", got, want)
 	}
 }
+
+func TestComposition_SequentialOfRouter(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "answer-a")}}
+	b := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "answer-b")}}
+
+	classifier := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		return []Message{msg(RoleAssistant, "classified-as-a")}, nil
+	})
+	decide := func(ctx context.Context, in []Message) (string, error) {
+		// A real router would inspect the classifier's output (last message).
+		return "a", nil
+	}
+
+	in := []Message{msg(RoleUser, "hi")}
+	got, err := Sequential(classifier, Router(decide, map[string]Agent{"a": a, "b": b})).Invoke(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	want := []Message{
+		msg(RoleUser, "hi"),
+		msg(RoleAssistant, "classified-as-a"),
+		msg(RoleAssistant, "answer-a"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Sequential(classifier, Router(...)) composition mismatch\n got: %v\nwant: %v", got, want)
+	}
+}
