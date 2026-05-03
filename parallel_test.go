@@ -36,14 +36,15 @@ func TestParallel_InvokeThreadsOutputsInIndexOrder(t *testing.T) {
 		t.Fatalf("Invoke returned error: %v", err)
 	}
 
+	// Parallel returns just its agents' outputs (no input prefix).
+	// Sequential is the transcript-builder; Parallel is a payload-producer.
 	want := []Message{
-		msg(RoleUser, "hello"),
 		msg(RoleAssistant, "from-a"),
 		msg(RoleAssistant, "from-b"),
 		msg(RoleAssistant, "from-c"),
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("transcript mismatch\n got: %v\nwant: %v", got, want)
+		t.Errorf("output mismatch\n got: %v\nwant: %v", got, want)
 	}
 }
 
@@ -176,8 +177,7 @@ func TestParallel_OutputOrderIsDeterministicDespiteTiming(t *testing.T) {
 		t.Fatalf("Invoke: %v", err)
 	}
 	want := []Message{
-		msg(RoleUser, "go"),
-		msg(RoleAssistant, "slow"),
+		msg(RoleAssistant, "slow"), // index 0 first, despite finishing last
 		msg(RoleAssistant, "fast"),
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -220,7 +220,6 @@ func TestParallel_StreamEmitsSingleDoneFrame(t *testing.T) {
 		t.Errorf("frame should have Done=true")
 	}
 	want := []Message{
-		msg(RoleUser, "hi"),
 		msg(RoleAssistant, "from-a"),
 		msg(RoleAssistant, "from-b"),
 	}

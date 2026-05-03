@@ -10,8 +10,10 @@ import (
 // Parallel runs agents concurrently against the same input.
 //
 // Each agent receives a clone of the input messages. The returned Agent's
-// output is the input transcript followed by each agent's output appended
-// in agent-index order (regardless of completion order).
+// output is each agent's output concatenated in agent-index order — no input
+// prefix. Sequential is the framework's transcript-builder; Parallel is a
+// payload-producer. This lets Sequential(planner, Parallel(...)) compose
+// without duplicating the input.
 //
 // Parallel() panics — a zero-agent fan-out is a programming bug.
 // Parallel(a) returns a directly.
@@ -66,11 +68,15 @@ func (p *parallel) Invoke(ctx context.Context, in []Message) ([]Message, error) 
 		}
 	}
 
-	transcript := slices.Clone(in)
+	// Return only the agents' outputs concatenated in index order — no input
+	// prefix. Sequential is the transcript-builder; Parallel is a payload-
+	// producer. This lets Sequential(planner, Parallel(...)) compose without
+	// duplicating the input.
+	var collected []Message
 	for _, out := range outs {
-		transcript = append(transcript, out...)
+		collected = append(collected, out...)
 	}
-	return transcript, nil
+	return collected, nil
 }
 
 func (p *parallel) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {
