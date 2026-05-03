@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -498,5 +499,40 @@ func TestFromAPIResponse_ThinkingBecomesReasoning(t *testing.T) {
 	}
 	if txt, ok := got.Content[1].(fugue.Text); !ok || txt.Text != "visible answer" {
 		t.Errorf("content[1] = %v, want Text", got.Content[1])
+	}
+}
+
+func TestInvoke_HappyPath(t *testing.T) {
+	respJSON := `{
+		"id": "msg_abc",
+		"type": "message",
+		"role": "assistant",
+		"model": "claude-sonnet-4-6",
+		"content": [{"type":"text","text":"hello yourself"}],
+		"stop_reason": "end_turn",
+		"usage": {"input_tokens":5,"output_tokens":3}
+	}`
+	ft := &fakeTransport{responses: []*http.Response{okResponse(respJSON)}}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft)
+
+	got, err := a.Invoke(context.Background(), []fugue.Message{msg(fugue.RoleUser, "hello")})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 returned message, got %d", len(got))
+	}
+	m := got[0]
+	if m.Role != fugue.RoleAssistant {
+		t.Errorf("role = %v, want assistant", m.Role)
+	}
+	if txt, ok := m.Content[0].(fugue.Text); !ok || txt.Text != "hello yourself" {
+		t.Errorf("content[0] = %v, want hello yourself", m.Content[0])
+	}
+	if m.Name != "end_turn" {
+		t.Errorf("Name = %q, want end_turn", m.Name)
+	}
+	if len(ft.requests) != 1 {
+		t.Errorf("want 1 HTTP request, got %d", len(ft.requests))
 	}
 }

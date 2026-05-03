@@ -73,11 +73,47 @@ type agent struct {
 	cfg   config
 }
 
-// Stub Invoke and Stream so *agent satisfies fugue.Agent. Implemented in later tasks.
 func (a *agent) Invoke(ctx context.Context, in []fugue.Message) ([]fugue.Message, error) {
-	return nil, nil
+	params, err := a.buildParams(in)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.cfg.client.Messages.New(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	out, err := fromAPIResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	return []fugue.Message{out}, nil
 }
 
 func (a *agent) Stream(ctx context.Context, in []fugue.Message) iter.Seq2[fugue.Event[[]fugue.Message], error] {
 	return func(yield func(fugue.Event[[]fugue.Message], error) bool) {}
+}
+
+// buildParams assembles MessageNewParams from the input. Shared between
+// Invoke and Stream.
+func (a *agent) buildParams(in []fugue.Message) (sdk.MessageNewParams, error) {
+	system, body, err := splitSystem(in, a.cfg.systemPrompt)
+	if err != nil {
+		return sdk.MessageNewParams{}, err
+	}
+	apiMessages, err := toAPIMessages(body)
+	if err != nil {
+		return sdk.MessageNewParams{}, err
+	}
+	params := sdk.MessageNewParams{
+		Model:     sdk.Model(a.model),
+		MaxTokens: int64(a.cfg.maxTokens),
+		Messages:  apiMessages,
+	}
+	if system != "" {
+		params.System = []sdk.TextBlockParam{{Text: system}}
+	}
+	if a.cfg.temperature != nil {
+		params.Temperature = sdk.Float(*a.cfg.temperature)
+	}
+	return params, nil
 }
