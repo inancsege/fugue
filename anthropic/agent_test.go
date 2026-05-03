@@ -3,6 +3,7 @@ package anthropic
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -315,5 +316,144 @@ func TestToAPIMessages_ImageWithURL(t *testing.T) {
 	}
 	if !hasURLImageBlock(got[0], "https://example.com/x.png") {
 		t.Errorf("expected URL image block")
+	}
+}
+
+// hasToolUseBlock returns true if m has a tool_use block with matching id+name.
+func hasToolUseBlock(m sdk.MessageParam, id, name string) bool {
+	for _, b := range m.Content {
+		if b.OfToolUse == nil {
+			continue
+		}
+		if b.OfToolUse.ID == id && b.OfToolUse.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// hasToolResultBlock returns true if m has a tool_result block with matching
+// tool_use_id and content text equal to wantText.
+func hasToolResultBlock(m sdk.MessageParam, toolUseID, wantText string) bool {
+	for _, b := range m.Content {
+		if b.OfToolResult == nil || b.OfToolResult.ToolUseID != toolUseID {
+			continue
+		}
+		for _, c := range b.OfToolResult.Content {
+			if t := c.GetText(); t != nil && *t == wantText {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isUserRole(m sdk.MessageParam) bool {
+	return m.Role == sdk.MessageParamRoleUser
+}
+
+func TestFromAPIResponse_ToolUseBecomesToolCalls(t *testing.T) {
+	resp := &sdk.Message{
+		Content: []sdk.ContentBlockUnion{
+			{Type: "text", Text: "let me check the weather"},
+			{Type: "tool_use", ID: "toolu_123", Name: "get_weather", Input: json.RawMessage(`{"city":"NYC"}`)},
+		},
+		StopReason: sdk.StopReasonToolUse,
+	}
+	got, err := fromAPIResponse(resp)
+	if err != nil {
+		t.Fatalf("fromAPIResponse: %v", err)
+	}
+	if len(got.ToolCalls) != 1 {
+		t.Fatalf("want 1 tool call, got %d", len(got.ToolCalls))
+	}
+	tc := got.ToolCalls[0]
+	if tc.ID != "toolu_123" || tc.Name != "get_weather" {
+		t.Errorf("tool call mismatch: %+v", tc)
+	}
+	if string(tc.Arguments) != `{"city":"NYC"}` {
+		t.Errorf("Arguments = %s, want %s", tc.Arguments, `{"city":"NYC"}`)
+	}
+}
+
+func TestToAPIMessages_AssistantWithToolCalls(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleUser, "weather please"),
+		{
+			Role:    fugue.RoleAssistant,
+			Content: []fugue.Part{fugue.Text{Text: "checking"}},
+			ToolCalls: []fugue.ToolCall{{
+				ID: "toolu_1", Name: "weather", Arguments: json.RawMessage(`{"city":"NYC"}`),
+			}},
+		},
+	}
+	got, err := toAPIMessages(in)
+	if err != nil {
+		t.Fatalf("toAPIMessages: %v", err)
+	}
+	if !hasToolUseBlock(got[1], "toolu_1", "weather") {
+		t.Errorf("expected tool_use block in assistant message")
+	}
+}
+
+func TestToAPIMessages_RoleToolBecomesUserToolResult(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleUser, "weather please"),
+		{
+			Role: fugue.RoleAssistant,
+			ToolCalls: []fugue.ToolCall{{
+				ID: "toolu_1", Name: "weather", Arguments: json.RawMessage(`{}`),
+			}},
+		},
+		{
+			Role:       fugue.RoleTool,
+			ToolCallID: "toolu_1",
+			Content:    []fugue.Part{fugue.Text{Text: "72F sunny"}},
+		},
+	}
+	got, err := toAPIMessages(in)
+	if err != nil {
+		t.Fatalf("toAPIMessages: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 messages, got %d", len(got))
+	}
+	if !isUserRole(got[2]) {
+		t.Errorf("tool result message should have user role, got %v", got[2].Role)
+	}
+	if !hasToolResultBlock(got[2], "toolu_1", "72F sunny") {
+		t.Errorf("expected tool_result block")
+	}
+}
+
+func TestToAPIMessages_ConsecutiveRoleToolsCollapse(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleUser, "two tools"),
+		{Role: fugue.RoleAssistant, ToolCalls: []fugue.ToolCall{
+			{ID: "a", Name: "x", Arguments: json.RawMessage(`{}`)},
+			{ID: "b", Name: "y", Arguments: json.RawMessage(`{}`)},
+		}},
+		{Role: fugue.RoleTool, ToolCallID: "a", Content: []fugue.Part{fugue.Text{Text: "ra"}}},
+		{Role: fugue.RoleTool, ToolCallID: "b", Content: []fugue.Part{fugue.Text{Text: "rb"}}},
+	}
+	got, err := toAPIMessages(in)
+	if err != nil {
+		t.Fatalf("toAPIMessages: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 messages (consecutive tool results collapse), got %d", len(got))
+	}
+	if !hasToolResultBlock(got[2], "a", "ra") || !hasToolResultBlock(got[2], "b", "rb") {
+		t.Errorf("expected both tool_result blocks in collapsed message")
+	}
+}
+
+func TestToAPIMessages_RoleToolWithoutIDErrors(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleUser, "x"),
+		{Role: fugue.RoleTool, Content: []fugue.Part{fugue.Text{Text: "no id"}}},
+	}
+	if _, err := toAPIMessages(in); err == nil {
+		t.Fatal("expected error for RoleTool without ToolCallID")
 	}
 }

@@ -57,13 +57,17 @@ func partsToText(parts []fugue.Part) string {
 }
 
 // toAPIMessages translates a fugue conversation body (post-splitSystem) into
-// Anthropic MessageParams. Returns an error for empty input.
+// Anthropic MessageParams. Returns an error for empty input. Consecutive
+// RoleTool messages collapse into a single user-role message containing
+// multiple tool_result blocks (Anthropic's required shape).
 func toAPIMessages(in []fugue.Message) ([]sdk.MessageParam, error) {
 	if len(in) == 0 {
 		return nil, errors.New("anthropic: at least one non-system message is required")
 	}
 	out := make([]sdk.MessageParam, 0, len(in))
-	for _, m := range in {
+	i := 0
+	for i < len(in) {
+		m := in[i]
 		switch m.Role {
 		case fugue.RoleUser:
 			blocks, err := contentToBlocks(m.Content, m.ToolCalls)
@@ -71,14 +75,25 @@ func toAPIMessages(in []fugue.Message) ([]sdk.MessageParam, error) {
 				return nil, err
 			}
 			out = append(out, sdk.NewUserMessage(blocks...))
+			i++
 		case fugue.RoleAssistant:
 			blocks, err := contentToBlocks(m.Content, m.ToolCalls)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, sdk.NewAssistantMessage(blocks...))
+			i++
 		case fugue.RoleTool:
-			return nil, errors.New("anthropic: RoleTool translation not yet implemented")
+			var blocks []sdk.ContentBlockParamUnion
+			for i < len(in) && in[i].Role == fugue.RoleTool {
+				tm := in[i]
+				if tm.ToolCallID == "" {
+					return nil, errors.New("anthropic: RoleTool message requires ToolCallID")
+				}
+				blocks = append(blocks, sdk.NewToolResultBlock(tm.ToolCallID, partsToText(tm.Content), false))
+				i++
+			}
+			out = append(out, sdk.NewUserMessage(blocks...))
 		case fugue.RoleSystem:
 			return nil, errors.New("anthropic: RoleSystem must be handled by splitSystem")
 		default:
@@ -109,8 +124,10 @@ func contentToBlocks(parts []fugue.Part, calls []fugue.ToolCall) ([]sdk.ContentB
 			return nil, fmt.Errorf("anthropic: unknown Part type %T", p)
 		}
 	}
-	if len(calls) > 0 {
-		return nil, errors.New("anthropic: tool_use translation not yet implemented")
+	for _, tc := range calls {
+		// SDK's NewToolUseBlock wraps Input as `any` — pass json.RawMessage
+		// through; it implements MarshalJSON, so the SDK encodes it verbatim.
+		out = append(out, sdk.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
 	}
 	return out, nil
 }
