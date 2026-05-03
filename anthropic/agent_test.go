@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -103,4 +104,71 @@ func TestNew_PanicsOnEmptyModel(t *testing.T) {
 		}
 	}()
 	New("")
+}
+
+func TestSplitSystem_FromOption(t *testing.T) {
+	body := []fugue.Message{msg(fugue.RoleUser, "hello")}
+	sys, rest, err := splitSystem(body, "you are helpful")
+	if err != nil {
+		t.Fatalf("splitSystem: %v", err)
+	}
+	if sys != "you are helpful" {
+		t.Errorf("sys = %q, want %q", sys, "you are helpful")
+	}
+	if !reflect.DeepEqual(rest, body) {
+		t.Errorf("rest = %v, want unchanged %v", rest, body)
+	}
+}
+
+func TestSplitSystem_FromLeadingRoleSystem(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleSystem, "be brief"),
+		msg(fugue.RoleSystem, "no markdown"),
+		msg(fugue.RoleUser, "hello"),
+	}
+	sys, rest, err := splitSystem(in, "")
+	if err != nil {
+		t.Fatalf("splitSystem: %v", err)
+	}
+	wantSys := "be brief\nno markdown"
+	if sys != wantSys {
+		t.Errorf("sys = %q, want %q", sys, wantSys)
+	}
+	wantRest := []fugue.Message{msg(fugue.RoleUser, "hello")}
+	if !reflect.DeepEqual(rest, wantRest) {
+		t.Errorf("rest = %v, want %v", rest, wantRest)
+	}
+}
+
+func TestSplitSystem_OptionOverridesLeadingRoleSystem(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleSystem, "be brief"),
+		msg(fugue.RoleUser, "hello"),
+	}
+	sys, rest, err := splitSystem(in, "use option text")
+	if err != nil {
+		t.Fatalf("splitSystem: %v", err)
+	}
+	if sys != "use option text" {
+		t.Errorf("sys = %q, want option text", sys)
+	}
+	wantRest := []fugue.Message{msg(fugue.RoleUser, "hello")}
+	if !reflect.DeepEqual(rest, wantRest) {
+		t.Errorf("rest = %v, want %v", rest, wantRest)
+	}
+}
+
+func TestSplitSystem_MidConversationSystemErrors(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleUser, "hello"),
+		msg(fugue.RoleSystem, "INTERRUPT"),
+		msg(fugue.RoleAssistant, "hi"),
+	}
+	_, _, err := splitSystem(in, "")
+	if err == nil {
+		t.Fatal("expected error for mid-conversation RoleSystem")
+	}
+	if !strings.Contains(err.Error(), "system") {
+		t.Errorf("error should mention system, got: %v", err)
+	}
 }
