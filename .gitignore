@@ -25,3 +25,7 @@ Thumbs.db
 
 # Skill-generated specs and plans (brainstorming, writing-plans, etc.)
 docs/superpowers/
+
+# claude
+claude/
+.claude/
