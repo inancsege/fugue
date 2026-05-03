@@ -184,3 +184,75 @@ func TestParallel_OutputOrderIsDeterministicDespiteTiming(t *testing.T) {
 		t.Errorf("ordering mismatch\n got: %v\nwant: %v", got, want)
 	}
 }
+
+func TestParallel_InvokeDoesNotMutateInput(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "out-a")}}
+	b := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "out-b")}}
+	in := []Message{msg(RoleUser, "hi")}
+	inCopy := append([]Message(nil), in...)
+
+	if _, err := Parallel(a, b).Invoke(context.Background(), in); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if !reflect.DeepEqual(in, inCopy) {
+		t.Errorf("input was mutated\n got: %v\nwant: %v", in, inCopy)
+	}
+}
+
+func TestParallel_StreamEmitsSingleDoneFrame(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-a")}}
+	b := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-b")}}
+
+	in := []Message{msg(RoleUser, "hi")}
+	var frames []Event[[]Message]
+	for ev, err := range Parallel(a, b).Stream(context.Background(), in) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		frames = append(frames, ev)
+	}
+
+	if len(frames) != 1 {
+		t.Fatalf("expected 1 frame, got %d", len(frames))
+	}
+	if !frames[0].Done {
+		t.Errorf("frame should have Done=true")
+	}
+	want := []Message{
+		msg(RoleUser, "hi"),
+		msg(RoleAssistant, "from-a"),
+		msg(RoleAssistant, "from-b"),
+	}
+	if !reflect.DeepEqual(frames[0].Delta, want) {
+		t.Errorf("frame.Delta mismatch\n got: %v\nwant: %v", frames[0].Delta, want)
+	}
+}
+
+func TestParallel_StreamPropagatesInvokeError(t *testing.T) {
+	boom := errors.New("stream blew up")
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-a")}}
+	b := &fakeAgent{invokeErr: boom}
+
+	var sawErr error
+	for _, err := range Parallel(a, b).Stream(context.Background(), []Message{msg(RoleUser, "hi")}) {
+		if err != nil {
+			sawErr = err
+			break
+		}
+	}
+
+	if sawErr == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var se *StageError
+	if !errors.As(sawErr, &se) {
+		t.Fatalf("expected *StageError, got %T: %v", sawErr, sawErr)
+	}
+	if se.Index != 1 {
+		t.Errorf("StageError.Index = %d, want 1", se.Index)
+	}
+	if !errors.Is(se, boom) {
+		t.Errorf("errors.Is should find the underlying error")
+	}
+}

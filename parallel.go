@@ -74,5 +74,12 @@ func (p *parallel) Invoke(ctx context.Context, in []Message) ([]Message, error) 
 }
 
 func (p *parallel) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {
-	return func(yield func(Event[[]Message], error) bool) {}
+	return func(yield func(Event[[]Message], error) bool) {
+		out, err := p.Invoke(ctx, in)
+		if err != nil {
+			yield(Event[[]Message]{}, err)
+			return
+		}
+		yield(Event[[]Message]{Delta: out, Done: true}, nil)
+	}
 }
