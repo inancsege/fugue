@@ -574,6 +574,26 @@ func streamingResponseTwoTextDeltas() *http.Response {
 	return sseResponse(events...)
 }
 
+func TestStream_ConsumerCancelClosesBody(t *testing.T) {
+	ft := &fakeTransport{responses: []*http.Response{streamingResponseTwoTextDeltas()}}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft)
+
+	count := 0
+	for _, err := range a.Stream(context.Background(), []fugue.Message{msg(fugue.RoleUser, "hi")}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		count++
+		if count >= 1 {
+			break
+		}
+	}
+
+	if ft.closeCalls != 1 {
+		t.Errorf("expected response body to be closed exactly once, got %d", ft.closeCalls)
+	}
+}
+
 func TestStream_CumulativeDeltas(t *testing.T) {
 	ft := &fakeTransport{responses: []*http.Response{streamingResponseTwoTextDeltas()}}
 	a := newAgentWithTransport("claude-sonnet-4-6", ft)
