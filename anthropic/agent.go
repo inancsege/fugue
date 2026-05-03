@@ -90,7 +90,39 @@ func (a *agent) Invoke(ctx context.Context, in []fugue.Message) ([]fugue.Message
 }
 
 func (a *agent) Stream(ctx context.Context, in []fugue.Message) iter.Seq2[fugue.Event[[]fugue.Message], error] {
-	return func(yield func(fugue.Event[[]fugue.Message], error) bool) {}
+	return func(yield func(fugue.Event[[]fugue.Message], error) bool) {
+		params, err := a.buildParams(in)
+		if err != nil {
+			yield(fugue.Event[[]fugue.Message]{}, err)
+			return
+		}
+		stream := a.cfg.client.Messages.NewStreaming(ctx, params)
+		defer stream.Close()
+
+		var acc sdk.Message
+		for stream.Next() {
+			event := stream.Current()
+			if err := acc.Accumulate(event); err != nil {
+				yield(fugue.Event[[]fugue.Message]{}, err)
+				return
+			}
+			cumulative, err := fromAPIResponse(&acc)
+			if err != nil {
+				yield(fugue.Event[[]fugue.Message]{}, err)
+				return
+			}
+			done := event.Type == "message_stop"
+			if !yield(fugue.Event[[]fugue.Message]{
+				Delta: []fugue.Message{cumulative},
+				Done:  done,
+			}, nil) {
+				return
+			}
+		}
+		if err := stream.Err(); err != nil {
+			yield(fugue.Event[[]fugue.Message]{}, err)
+		}
+	}
 }
 
 // buildParams assembles MessageNewParams from the input. Shared between

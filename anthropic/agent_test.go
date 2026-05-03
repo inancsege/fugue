@@ -558,3 +558,69 @@ func TestInvoke_SDKErrorPassesThrough(t *testing.T) {
 	// Don't assert wording — just that the error surfaced. Our contract is
 	// "pass SDK errors through unwrapped"; the SDK formats them in its own style.
 }
+
+// streamingResponseTwoTextDeltas builds an SSE response: one text block,
+// two deltas ("hel" + "lo"), then message_stop.
+func streamingResponseTwoTextDeltas() *http.Response {
+	events := []string{
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-6\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hel\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2}}\n\n",
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+	}
+	return sseResponse(events...)
+}
+
+func TestStream_CumulativeDeltas(t *testing.T) {
+	ft := &fakeTransport{responses: []*http.Response{streamingResponseTwoTextDeltas()}}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft)
+
+	var frames []fugue.Event[[]fugue.Message]
+	for ev, err := range a.Stream(context.Background(), []fugue.Message{msg(fugue.RoleUser, "hi")}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		frames = append(frames, ev)
+	}
+
+	if len(frames) == 0 {
+		t.Fatal("expected at least one frame")
+	}
+	// Only the last frame has Done=true.
+	for i, f := range frames[:len(frames)-1] {
+		if f.Done {
+			t.Errorf("frame %d should have Done=false", i)
+		}
+	}
+	last := frames[len(frames)-1]
+	if !last.Done {
+		t.Errorf("final frame should have Done=true")
+	}
+	// Cumulative: last frame's text equals "hello".
+	if len(last.Delta) != 1 {
+		t.Fatalf("final frame should have 1 message, got %d", len(last.Delta))
+	}
+	finalMsg := last.Delta[0]
+	if len(finalMsg.Content) == 0 {
+		t.Fatal("final message has no content")
+	}
+	if txt, ok := finalMsg.Content[0].(fugue.Text); !ok || txt.Text != "hello" {
+		t.Errorf("final cumulative text = %v, want hello", finalMsg.Content[0])
+	}
+	// Monotonic: text length never shrinks across frames.
+	prevLen := -1
+	for i, f := range frames {
+		if len(f.Delta) == 0 || len(f.Delta[0].Content) == 0 {
+			continue
+		}
+		if txt, ok := f.Delta[0].Content[0].(fugue.Text); ok {
+			if prevLen >= 0 && len(txt.Text) < prevLen {
+				t.Errorf("frame %d text shrank: %d < %d (not cumulative)", i, len(txt.Text), prevLen)
+			}
+			prevLen = len(txt.Text)
+		}
+	}
+}
