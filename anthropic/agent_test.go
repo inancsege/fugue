@@ -536,3 +536,25 @@ func TestInvoke_HappyPath(t *testing.T) {
 		t.Errorf("want 1 HTTP request, got %d", len(ft.requests))
 	}
 }
+
+func TestInvoke_SDKErrorPassesThrough(t *testing.T) {
+	// SDK retries 5xx with backoff. Provide multiple fresh-body responses
+	// so the fakeTransport doesn't run out before retries exhaust.
+	responses := make([]*http.Response, 0, 5)
+	for i := 0; i < 5; i++ {
+		responses = append(responses, &http.Response{
+			StatusCode: 500,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"api_error","message":"boom"}}`)),
+		})
+	}
+	ft := &fakeTransport{responses: responses}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft, WithMaxTokens(8))
+
+	_, err := a.Invoke(context.Background(), []fugue.Message{msg(fugue.RoleUser, "x")})
+	if err == nil {
+		t.Fatal("expected error from 500 response")
+	}
+	// Don't assert wording — just that the error surfaced. Our contract is
+	// "pass SDK errors through unwrapped"; the SDK formats them in its own style.
+}
