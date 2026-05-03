@@ -221,3 +221,34 @@ func TestRouter_DecideReceivesCallerContextAndInput(t *testing.T) {
 		t.Errorf("chosen agent saw %v, want %v", a.seenInvokeIn, in)
 	}
 }
+
+func TestRouter_StreamForwardsFramesVerbatim(t *testing.T) {
+	a := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "partial")}, Done: false},
+			{Delta: []Message{msg(RoleAssistant, "final")}, Done: true},
+		},
+	}
+	decide := func(ctx context.Context, in []Message) (string, error) {
+		return "a", nil
+	}
+	r := Router(decide, map[string]Agent{"a": a})
+
+	var got []Event[[]Message]
+	for ev, err := range r.Stream(context.Background(), []Message{msg(RoleUser, "hi")}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		got = append(got, ev)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 frames, got %d", len(got))
+	}
+	if got[0].Done {
+		t.Errorf("frame 0 should have Done=false (verbatim from agent)")
+	}
+	if !got[1].Done {
+		t.Errorf("frame 1 should have Done=true (verbatim from agent)")
+	}
+}

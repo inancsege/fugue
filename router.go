@@ -51,7 +51,23 @@ func (r *router) Invoke(ctx context.Context, in []Message) ([]Message, error) {
 }
 
 func (r *router) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {
-	return func(yield func(Event[[]Message], error) bool) {}
+	return func(yield func(Event[[]Message], error) bool) {
+		key, err := r.decide(ctx, in)
+		if err != nil {
+			yield(Event[[]Message]{}, &RouteError{Key: "", Err: err})
+			return
+		}
+		chosen, ok := r.routes[key]
+		if !ok {
+			yield(Event[[]Message]{}, &RouteError{Key: key, Err: errNoRoute(key)})
+			return
+		}
+		for ev, err := range chosen.Stream(ctx, in) {
+			if !yield(ev, err) {
+				return
+			}
+		}
+	}
 }
 
 // errNoRoute returns the sentinel-style error used inside *RouteError when
