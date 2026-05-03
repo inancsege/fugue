@@ -457,3 +457,46 @@ func TestToAPIMessages_RoleToolWithoutIDErrors(t *testing.T) {
 		t.Fatal("expected error for RoleTool without ToolCallID")
 	}
 }
+
+// blockCount returns the number of content blocks in a MessageParam.
+func blockCount(m sdk.MessageParam) int { return len(m.Content) }
+
+func TestToAPIMessages_ReasoningPartDropped(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleUser, "hi"),
+		{Role: fugue.RoleAssistant, Content: []fugue.Part{
+			fugue.Reasoning{Text: "internal thoughts"},
+			fugue.Text{Text: "visible text"},
+		}},
+	}
+	got, err := toAPIMessages(in)
+	if err != nil {
+		t.Fatalf("toAPIMessages: %v", err)
+	}
+	if blockCount(got[1]) != 1 {
+		t.Errorf("expected 1 block (Reasoning dropped), got %d", blockCount(got[1]))
+	}
+}
+
+func TestFromAPIResponse_ThinkingBecomesReasoning(t *testing.T) {
+	resp := &sdk.Message{
+		Content: []sdk.ContentBlockUnion{
+			{Type: "thinking", Thinking: "step 1: ..."},
+			{Type: "text", Text: "visible answer"},
+		},
+		StopReason: sdk.StopReasonEndTurn,
+	}
+	got, err := fromAPIResponse(resp)
+	if err != nil {
+		t.Fatalf("fromAPIResponse: %v", err)
+	}
+	if len(got.Content) != 2 {
+		t.Fatalf("want 2 parts, got %d", len(got.Content))
+	}
+	if r, ok := got.Content[0].(fugue.Reasoning); !ok || r.Text != "step 1: ..." {
+		t.Errorf("content[0] = %v, want Reasoning", got.Content[0])
+	}
+	if txt, ok := got.Content[1].(fugue.Text); !ok || txt.Text != "visible answer" {
+		t.Errorf("content[1] = %v, want Text", got.Content[1])
+	}
+}
