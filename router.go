@@ -39,7 +39,15 @@ type router struct {
 }
 
 func (r *router) Invoke(ctx context.Context, in []Message) ([]Message, error) {
-	return nil, nil
+	key, err := r.decide(ctx, in)
+	if err != nil {
+		return nil, &RouteError{Key: "", Err: err}
+	}
+	chosen, ok := r.routes[key]
+	if !ok {
+		return nil, &RouteError{Key: key, Err: errNoRoute(key)}
+	}
+	return chosen.Invoke(ctx, in)
 }
 
 func (r *router) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {

@@ -3,6 +3,7 @@ package fugue
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -55,5 +56,29 @@ func TestRouteError_ErrorAndUnwrap(t *testing.T) {
 	}
 	if !errors.Is(re2, underlying) {
 		t.Errorf("errors.Is should still find the wrapped error with empty Key")
+	}
+}
+
+func TestRouter_InvokeDispatchesToChosenAgent(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-a")}}
+	b := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-b")}}
+
+	decide := func(ctx context.Context, in []Message) (string, error) {
+		return "a", nil
+	}
+	r := Router(decide, map[string]Agent{"a": a, "b": b})
+
+	in := []Message{msg(RoleUser, "hi")}
+	got, err := r.Invoke(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	want := []Message{msg(RoleAssistant, "from-a")}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("output mismatch\n got: %v\nwant: %v", got, want)
+	}
+	if b.seenInvokeIn != nil {
+		t.Errorf("agent b should not have been invoked, saw %v", b.seenInvokeIn)
 	}
 }
