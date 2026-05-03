@@ -172,3 +172,12 @@ func TestSplitSystem_MidConversationSystemErrors(t *testing.T) {
 		t.Errorf("error should mention system, got: %v", err)
 	}
 }
+
+func TestToAPIMessages_EmptyInputErrors(t *testing.T) {
+	if _, err := toAPIMessages(nil); err == nil {
+		t.Fatal("expected error for nil input")
+	}
+	if _, err := toAPIMessages([]fugue.Message{}); err == nil {
+		t.Fatal("expected error for zero-length input")
+	}
+}

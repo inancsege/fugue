@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/inancsege/fugue"
 )
 
@@ -51,4 +52,13 @@ func partsToText(parts []fugue.Part) string {
 		}
 	}
 	return b.String()
+}
+
+// toAPIMessages translates a fugue conversation body (post-splitSystem) into
+// Anthropic MessageParams. Returns an error for empty input.
+func toAPIMessages(in []fugue.Message) ([]sdk.MessageParam, error) {
+	if len(in) == 0 {
+		return nil, errors.New("anthropic: at least one non-system message is required")
+	}
+	return nil, errors.New("anthropic: toAPIMessages not yet implemented for non-empty input")
 }
