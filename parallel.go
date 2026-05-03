@@ -4,6 +4,7 @@ import (
 	"context"
 	"iter"
 	"slices"
+	"sync"
 )
 
 // Parallel runs agents concurrently against the same input.
@@ -34,7 +35,42 @@ type parallel struct {
 }
 
 func (p *parallel) Invoke(ctx context.Context, in []Message) ([]Message, error) {
-	return nil, nil
+	outs := make([][]Message, len(p.agents))
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errs := make(chan error, len(p.agents))
+	var wg sync.WaitGroup
+	wg.Add(len(p.agents))
+	for i, a := range p.agents {
+		i, a := i, a
+		go func() {
+			defer wg.Done()
+			inClone := slices.Clone(in)
+			out, err := a.Invoke(ctx, inClone)
+			if err != nil {
+				errs <- &StageError{Index: i, Err: err, Partial: inClone}
+				cancel()
+				return
+			}
+			outs[i] = out
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	transcript := slices.Clone(in)
+	for _, out := range outs {
+		transcript = append(transcript, out...)
+	}
+	return transcript, nil
 }
 
 func (p *parallel) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {
