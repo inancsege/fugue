@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParallel_PanicsOnZeroAgents(t *testing.T) {
@@ -42,5 +43,50 @@ func TestParallel_InvokeThreadsOutputsInIndexOrder(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("transcript mismatch\n got: %v\nwant: %v", got, want)
+	}
+}
+
+func TestParallel_EachAgentSeesOriginalInput(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-a")}}
+	b := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-b")}}
+	c := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-c")}}
+
+	in := []Message{msg(RoleUser, "hello")}
+	if _, err := Parallel(a, b, c).Invoke(context.Background(), in); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	for name, fa := range map[string]*fakeAgent{"a": a, "b": b, "c": c} {
+		if !reflect.DeepEqual(fa.seenInvokeIn, in) {
+			t.Errorf("agent %s saw %v, want original input %v", name, fa.seenInvokeIn, in)
+		}
+	}
+}
+
+func TestParallel_OutputOrderIsDeterministicDespiteTiming(t *testing.T) {
+	slow := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return []Message{msg(RoleAssistant, "slow")}, nil
+	})
+	fast := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		return []Message{msg(RoleAssistant, "fast")}, nil
+	})
+
+	in := []Message{msg(RoleUser, "go")}
+	got, err := Parallel(slow, fast).Invoke(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	want := []Message{
+		msg(RoleUser, "go"),
+		msg(RoleAssistant, "slow"),
+		msg(RoleAssistant, "fast"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ordering mismatch\n got: %v\nwant: %v", got, want)
 	}
 }
