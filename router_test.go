@@ -252,3 +252,91 @@ func TestRouter_StreamForwardsFramesVerbatim(t *testing.T) {
 		t.Errorf("frame 1 should have Done=true (verbatim from agent)")
 	}
 }
+
+func TestRouter_StreamWrapsDecideError(t *testing.T) {
+	boom := errors.New("classifier offline")
+	a := &fakeAgent{streamFrames: []Event[[]Message]{{Delta: nil, Done: true}}}
+
+	decide := func(ctx context.Context, in []Message) (string, error) {
+		return "", boom
+	}
+	r := Router(decide, map[string]Agent{"a": a})
+
+	var sawErr error
+	for _, err := range r.Stream(context.Background(), []Message{msg(RoleUser, "hi")}) {
+		if err != nil {
+			sawErr = err
+			break
+		}
+	}
+
+	var re *RouteError
+	if !errors.As(sawErr, &re) {
+		t.Fatalf("expected *RouteError, got %T: %v", sawErr, sawErr)
+	}
+	if re.Key != "" {
+		t.Errorf("RouteError.Key = %q, want empty", re.Key)
+	}
+	if !errors.Is(re, boom) {
+		t.Error("errors.Is should find the underlying error")
+	}
+	if a.seenStreamIn != nil {
+		t.Error("agent's Stream should not have been called when decide errored")
+	}
+}
+
+func TestRouter_StreamWrapsUnknownKey(t *testing.T) {
+	a := &fakeAgent{streamFrames: []Event[[]Message]{{Delta: nil, Done: true}}}
+
+	decide := func(ctx context.Context, in []Message) (string, error) {
+		return "missing", nil
+	}
+	r := Router(decide, map[string]Agent{"a": a})
+
+	var sawErr error
+	for _, err := range r.Stream(context.Background(), []Message{msg(RoleUser, "hi")}) {
+		if err != nil {
+			sawErr = err
+			break
+		}
+	}
+
+	var re *RouteError
+	if !errors.As(sawErr, &re) {
+		t.Fatalf("expected *RouteError, got %T: %v", sawErr, sawErr)
+	}
+	if re.Key != "missing" {
+		t.Errorf("RouteError.Key = %q, want %q", re.Key, "missing")
+	}
+	if a.seenStreamIn != nil {
+		t.Error("agent's Stream should not have been called when key was unknown")
+	}
+}
+
+func TestRouter_StreamStopsOnConsumerCancel(t *testing.T) {
+	a := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "first")}, Done: false},
+			{Delta: []Message{msg(RoleAssistant, "second")}, Done: false},
+			{Delta: []Message{msg(RoleAssistant, "third")}, Done: true},
+		},
+	}
+	decide := func(ctx context.Context, in []Message) (string, error) { return "a", nil }
+	r := Router(decide, map[string]Agent{"a": a})
+
+	count := 0
+	for ev, err := range r.Stream(context.Background(), []Message{msg(RoleUser, "hi")}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		_ = ev
+		count++
+		if count == 1 {
+			break
+		}
+	}
+
+	if count != 1 {
+		t.Errorf("expected to consume exactly 1 frame, consumed %d", count)
+	}
+}
