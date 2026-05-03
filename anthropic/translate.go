@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -99,7 +100,11 @@ func contentToBlocks(parts []fugue.Part, calls []fugue.ToolCall) ([]sdk.ContentB
 			// Spec D8: dropped silently on input.
 			continue
 		case fugue.Image:
-			return nil, errors.New("anthropic: Image translation not yet implemented")
+			block, err := imageBlock(v)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, block)
 		default:
 			return nil, fmt.Errorf("anthropic: unknown Part type %T", p)
 		}
@@ -108,6 +113,22 @@ func contentToBlocks(parts []fugue.Part, calls []fugue.ToolCall) ([]sdk.ContentB
 		return nil, errors.New("anthropic: tool_use translation not yet implemented")
 	}
 	return out, nil
+}
+
+// imageBlock translates a fugue.Image into an Anthropic image content block.
+// Per spec: Data wins over URL when both are set.
+func imageBlock(img fugue.Image) (sdk.ContentBlockParamUnion, error) {
+	switch {
+	case len(img.Data) > 0:
+		if img.MIMEType == "" {
+			return sdk.ContentBlockParamUnion{}, errors.New("anthropic: Image with Data requires non-empty MIMEType")
+		}
+		return sdk.NewImageBlockBase64(img.MIMEType, base64.StdEncoding.EncodeToString(img.Data)), nil
+	case img.URL != "":
+		return sdk.NewImageBlock(sdk.URLImageSourceParam{URL: img.URL}), nil
+	default:
+		return sdk.ContentBlockParamUnion{}, errors.New("anthropic: Image requires Data or URL")
+	}
 }
 
 // fromAPIResponse translates an Anthropic Messages API response into a single

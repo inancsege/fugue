@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -245,5 +246,74 @@ func TestFromAPIResponse_TextOnly(t *testing.T) {
 	}
 	if got.Name != string(sdk.StopReasonEndTurn) {
 		t.Errorf("Name = %q, want %q", got.Name, sdk.StopReasonEndTurn)
+	}
+}
+
+// hasBase64ImageBlock returns true if m has an image block whose source is
+// base64 with the given media type and decoded bytes equal to wantBytes.
+func hasBase64ImageBlock(m sdk.MessageParam, mime string, wantBytes []byte) bool {
+	for _, b := range m.Content {
+		if b.OfImage == nil {
+			continue
+		}
+		src := b.OfImage.Source.OfBase64
+		if src == nil {
+			continue
+		}
+		if string(src.MediaType) == mime && src.Data == base64.StdEncoding.EncodeToString(wantBytes) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasURLImageBlock returns true if m has an image block with source URL == wantURL.
+func hasURLImageBlock(m sdk.MessageParam, wantURL string) bool {
+	for _, b := range m.Content {
+		if b.OfImage == nil {
+			continue
+		}
+		src := b.OfImage.Source.OfURL
+		if src == nil {
+			continue
+		}
+		if src.URL == wantURL {
+			return true
+		}
+	}
+	return false
+}
+
+func TestToAPIMessages_ImageWithData(t *testing.T) {
+	imgBytes := []byte{0x89, 0x50, 0x4E, 0x47}
+	in := []fugue.Message{{
+		Role: fugue.RoleUser,
+		Content: []fugue.Part{
+			fugue.Image{MIMEType: "image/png", Data: imgBytes},
+			fugue.Text{Text: "what's in this image?"},
+		},
+	}}
+	got, err := toAPIMessages(in)
+	if err != nil {
+		t.Fatalf("toAPIMessages: %v", err)
+	}
+	if !hasBase64ImageBlock(got[0], "image/png", imgBytes) {
+		t.Errorf("expected base64 image block in message content")
+	}
+}
+
+func TestToAPIMessages_ImageWithURL(t *testing.T) {
+	in := []fugue.Message{{
+		Role: fugue.RoleUser,
+		Content: []fugue.Part{
+			fugue.Image{URL: "https://example.com/x.png"},
+		},
+	}}
+	got, err := toAPIMessages(in)
+	if err != nil {
+		t.Fatalf("toAPIMessages: %v", err)
+	}
+	if !hasURLImageBlock(got[0], "https://example.com/x.png") {
+		t.Errorf("expected URL image block")
 	}
 }
