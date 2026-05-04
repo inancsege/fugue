@@ -29,3 +29,8 @@ docs/superpowers/
 # claude
 claude/
 .claude/
+
+# Local env
+.env
+.env.local
+*.env
