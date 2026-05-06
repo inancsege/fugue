@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -225,6 +226,62 @@ func TestParallel_StreamEmitsSingleDoneFrame(t *testing.T) {
 	}
 	if !reflect.DeepEqual(frames[0].Delta, want) {
 		t.Errorf("frame.Delta mismatch\n got: %v\nwant: %v", frames[0].Delta, want)
+	}
+}
+
+func TestParallel_RecoversChildPanic(t *testing.T) {
+	panicker := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		panic("boom")
+	})
+	var siblingSawCancel bool
+	slow := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		select {
+		case <-time.After(2 * time.Second):
+			return []Message{msg(RoleAssistant, "shouldn't reach")}, nil
+		case <-ctx.Done():
+			siblingSawCancel = true
+			return nil, ctx.Err()
+		}
+	})
+
+	in := []Message{msg(RoleUser, "x")}
+	got, err := Parallel(slow, panicker).Invoke(context.Background(), in)
+	if got != nil {
+		t.Errorf("on panic, output should be nil, got %v", got)
+	}
+	if err == nil {
+		t.Fatal("expected *StageError from recovered panic")
+	}
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StageError, got %T: %v", err, err)
+	}
+	if se.Index != 1 {
+		t.Errorf("StageError.Index = %d, want 1 (the panicking agent)", se.Index)
+	}
+	if !strings.Contains(se.Err.Error(), "panic") {
+		t.Errorf("StageError.Err should mention panic, got %q", se.Err.Error())
+	}
+	if !reflect.DeepEqual(se.Partial, in) {
+		t.Errorf("StageError.Partial should be the input passed to the panicking agent")
+	}
+	if !siblingSawCancel {
+		t.Error("slow sibling should have observed ctx.Done() after the panic")
+	}
+}
+
+func TestParallel_EmptyOutputsConcatenateCleanly(t *testing.T) {
+	empty1 := &fakeAgent{invokeOut: nil}
+	full := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "ok")}}
+	empty2 := &fakeAgent{invokeOut: nil}
+
+	got, err := Parallel(empty1, full, empty2).Invoke(context.Background(), []Message{msg(RoleUser, "hi")})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	want := []Message{msg(RoleAssistant, "ok")}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("output mismatch\n got: %v\nwant: %v", got, want)
 	}
 }
 

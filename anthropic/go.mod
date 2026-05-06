@@ -1,14 +1,17 @@
 module github.com/inancsege/fugue/anthropic
 
-go 1.26.2
+go 1.23.0
 
 replace github.com/inancsege/fugue => ..
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.38.0 // indirect
+	github.com/anthropics/anthropic-sdk-go v1.38.0
+	github.com/inancsege/fugue v0.0.0-20260502085955-77837cedec90
+)
+
+require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
-	github.com/inancsege/fugue v0.0.0-20260502085955-77837cedec90 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect

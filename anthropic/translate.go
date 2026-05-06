@@ -104,7 +104,11 @@ func toAPIMessages(in []fugue.Message) ([]sdk.MessageParam, error) {
 }
 
 // contentToBlocks translates fugue Parts (plus any ToolCalls) into Anthropic
-// content blocks. Reasoning parts on input are dropped per spec D8.
+// content blocks. Reasoning parts on input are dropped silently — Anthropic's
+// extended-thinking blocks are signed by the API and cannot be reconstructed
+// faithfully across the framework boundary, so re-sending them as text would
+// either fail signature verification or pollute the conversation. The model
+// will produce fresh thinking blocks on the next turn if thinking is enabled.
 func contentToBlocks(parts []fugue.Part, calls []fugue.ToolCall) ([]sdk.ContentBlockParamUnion, error) {
 	out := make([]sdk.ContentBlockParamUnion, 0, len(parts)+len(calls))
 	for _, p := range parts {
@@ -112,7 +116,6 @@ func contentToBlocks(parts []fugue.Part, calls []fugue.ToolCall) ([]sdk.ContentB
 		case fugue.Text:
 			out = append(out, sdk.NewTextBlock(v.Text))
 		case fugue.Reasoning:
-			// Spec D8: dropped silently on input.
 			continue
 		case fugue.Image:
 			block, err := imageBlock(v)

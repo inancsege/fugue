@@ -331,6 +331,45 @@ func TestSequential_StreamWrapsStageError(t *testing.T) {
 	}
 }
 
+// streamlessAgent violates the Stream contract: it yields zero frames on
+// success. Used to assert Sequential.Stream defends downstream consumers
+// from agents that fail to emit a terminal Done frame.
+type streamlessAgent struct {
+	invokeOut []Message
+}
+
+func (s *streamlessAgent) Invoke(ctx context.Context, in []Message) ([]Message, error) {
+	return s.invokeOut, nil
+}
+
+func (s *streamlessAgent) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Message], error] {
+	return func(yield func(Event[[]Message], error) bool) {}
+}
+
+func TestSequential_StreamSynthesisesTerminalDoneOnEmptyLastStage(t *testing.T) {
+	a := &fakeAgent{
+		streamFrames: []Event[[]Message]{
+			{Delta: []Message{msg(RoleAssistant, "from-a")}, Done: true},
+		},
+	}
+	last := &streamlessAgent{}
+
+	var got []Event[[]Message]
+	for ev, err := range Sequential(a, last).Stream(context.Background(), []Message{msg(RoleUser, "hi")}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		got = append(got, ev)
+	}
+
+	if len(got) == 0 {
+		t.Fatal("expected at least one frame")
+	}
+	if !got[len(got)-1].Done {
+		t.Errorf("final frame must have Done=true, got %v", got[len(got)-1])
+	}
+}
+
 func TestSequential_StreamStopsOnConsumerCancel(t *testing.T) {
 	a := &fakeAgent{
 		streamFrames: []Event[[]Message]{

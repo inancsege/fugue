@@ -128,6 +128,61 @@ pipeline := fugue.Sequential(logging, claude)
 Mirrors `http.HandlerFunc`. `Stream` lifts `Invoke` into a single `Done=true` frame; implement
 the `Agent` interface directly when you need real per-token streaming.
 
+## Streaming
+
+Every `Runnable` has a `Stream` method returning a Go 1.23 `iter.Seq2` of
+`(Event[O], error)`. The simplest consumer is a `range` loop:
+
+```go
+for ev, err := range pipeline.Stream(ctx, in) {
+    if err != nil {
+        return err
+    }
+    if ev.Done {
+        // ev.Delta is the cumulative final output.
+        return commit(ev.Delta)
+    }
+    render(ev.Delta) // cumulative — replace, don't append
+}
+```
+
+`Event.Delta` is **cumulative** for `[]Message`-shaped Runnables: each frame
+holds the stage's complete output as of that frame, not a per-token diff. The
+final frame has `Done == true`. When `err` is non-nil, ignore `Delta`.
+
+For mid-stream cancel — e.g. abort as soon as a stop word appears — use
+`iter.Pull2` to drive the iterator manually; calling the returned `stop` is
+how you signal the producer to release its connection:
+
+```go
+next, stop := iter.Pull2(pipeline.Stream(ctx, in))
+defer stop()
+for {
+    ev, err, ok := next()
+    if !ok {
+        return nil
+    }
+    if err != nil {
+        return err
+    }
+    if shouldStop(ev.Delta) {
+        return nil // defer stop() releases the upstream stream
+    }
+}
+```
+
+The combinators preserve streaming contracts in different ways:
+
+- **Sequential** forwards each stage's frames inline, flipping inner stages'
+  `Done` bits to false so only the very last frame of the final stage carries
+  `Done=true`.
+- **Router** forwards the chosen agent's frames verbatim — full per-token
+  streaming through the router. `decide` runs lazily on the consumer's first
+  iteration.
+- **Parallel** is buffered: it runs `Invoke` then emits one terminal frame.
+  Frames do not interleave (the order-preserving contract makes that
+  impossible without per-frame agent identification).
+
 ## Providers
 
 | Module | Status |

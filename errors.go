@@ -1,6 +1,15 @@
 package fugue
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrNoRoute is the sentinel that wraps a Router's "decide returned a key
+// absent from the routes map" condition. It is exposed inside the *RouteError
+// returned by Router so callers can write errors.Is(err, fugue.ErrNoRoute) to
+// distinguish unknown-key from decide-itself-failed.
+var ErrNoRoute = errors.New("no route")
 
 // StageError reports which stage of a combinator failed.
 //

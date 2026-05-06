@@ -64,6 +64,31 @@ func TestAgentFunc_StreamYieldsSingleDoneFrame(t *testing.T) {
 	}
 }
 
+func TestAgentFunc_StreamConsumerCancelDoesNotReinvoke(t *testing.T) {
+	calls := 0
+	a := AgentFunc(func(ctx context.Context, _ []Message) ([]Message, error) {
+		calls++
+		return []Message{msg(RoleAssistant, "out")}, nil
+	})
+
+	count := 0
+	for ev, err := range a.Stream(context.Background(), nil) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		_ = ev
+		count++
+		break // consumer cancels after first frame
+	}
+
+	if count != 1 {
+		t.Errorf("expected 1 consumed frame, got %d", count)
+	}
+	if calls != 1 {
+		t.Errorf("function should be invoked exactly once, got %d", calls)
+	}
+}
+
 func TestAgentFunc_StreamYieldsErrorFromFunction(t *testing.T) {
 	boom := errors.New("function blew up")
 	a := AgentFunc(func(ctx context.Context, _ []Message) ([]Message, error) {

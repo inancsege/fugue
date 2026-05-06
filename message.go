@@ -54,7 +54,9 @@ type Text struct {
 	Text string
 }
 
-// Image is an image content block. Either Data (with MIMEType) or URL must be set.
+// Image is an image content block. Either Data (with MIMEType) or URL must
+// be set. If both are set, Data wins — provider adapters base64-encode Data
+// and ignore URL. Data without MIMEType is an error at translation time.
 type Image struct {
 	MIMEType string
 	Data     []byte

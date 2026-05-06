@@ -313,6 +313,71 @@ func TestRouter_StreamWrapsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestRouter_UnknownKeyIsErrNoRoute(t *testing.T) {
+	a := &fakeAgent{invokeOut: []Message{msg(RoleAssistant, "from-a")}}
+	decide := func(ctx context.Context, in []Message) (string, error) {
+		return "missing", nil
+	}
+	r := Router(decide, map[string]Agent{"a": a})
+
+	_, err := r.Invoke(context.Background(), []Message{msg(RoleUser, "hi")})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrNoRoute) {
+		t.Errorf("errors.Is(err, ErrNoRoute) should be true; got err=%v", err)
+	}
+
+	// Decide-itself-failed must NOT be confused with unknown-key.
+	boom := errors.New("classifier offline")
+	rDecide := Router(func(ctx context.Context, in []Message) (string, error) {
+		return "", boom
+	}, map[string]Agent{"a": a})
+	_, err = rDecide.Invoke(context.Background(), []Message{msg(RoleUser, "hi")})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if errors.Is(err, ErrNoRoute) {
+		t.Error("decide-error case should NOT match ErrNoRoute")
+	}
+}
+
+func TestRouter_ConcurrentInvokeIsSafe(t *testing.T) {
+	// Use stateless agentFunc fixtures so the race detector only flags races
+	// inside Router itself, not in shared test-fixture mutation.
+	a := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		return []Message{msg(RoleAssistant, "from-a")}, nil
+	})
+	b := agentFunc(func(ctx context.Context, in []Message) ([]Message, error) {
+		return []Message{msg(RoleAssistant, "from-b")}, nil
+	})
+	decide := func(ctx context.Context, in []Message) (string, error) {
+		if t, ok := in[0].Content[0].(Text); ok && strings.Contains(t.Text, "b") {
+			return "b", nil
+		}
+		return "a", nil
+	}
+	r := Router(decide, map[string]Agent{"a": a, "b": b})
+
+	const N = 32
+	errCh := make(chan error, N)
+	for i := 0; i < N; i++ {
+		go func(i int) {
+			key := "a-msg"
+			if i%2 == 1 {
+				key = "b-msg"
+			}
+			_, err := r.Invoke(context.Background(), []Message{msg(RoleUser, key)})
+			errCh <- err
+		}(i)
+	}
+	for i := 0; i < N; i++ {
+		if err := <-errCh; err != nil {
+			t.Errorf("concurrent Invoke #%d: %v", i, err)
+		}
+	}
+}
+
 func TestRouter_StreamStopsOnConsumerCancel(t *testing.T) {
 	a := &fakeAgent{
 		streamFrames: []Event[[]Message]{

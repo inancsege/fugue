@@ -35,7 +35,10 @@ func (s *sequential) Invoke(ctx context.Context, in []Message) ([]Message, error
 		if err != nil {
 			return nil, &StageError{Index: i, Err: err, Partial: transcript}
 		}
-		transcript = append(transcript, out...)
+		// Clip before append so a misbehaving agent that resliced its input
+		// past len cannot observe writes from subsequent stages through the
+		// shared backing array.
+		transcript = append(slices.Clip(transcript), out...)
 	}
 	return transcript, nil
 }
@@ -47,6 +50,7 @@ func (s *sequential) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[
 
 		for i, a := range s.agents {
 			var stageOut []Message
+			sawDone := false
 			isLast := i == last
 
 			for ev, err := range a.Stream(ctx, transcript) {
@@ -54,18 +58,30 @@ func (s *sequential) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[
 					yield(Event[[]Message]{}, &StageError{Index: i, Err: err, Partial: transcript})
 					return
 				}
-				if ev.Done && !isLast {
-					ev.Done = false
+				if ev.Done {
+					sawDone = true
+					if !isLast {
+						ev.Done = false
+					}
 				}
-				// Assumes Event.Delta is cumulative — the last frame holds the
-				// stage's complete output. If providers ever emit per-token
-				// diffs, this becomes `stageOut = append(stageOut, ev.Delta...)`.
+				// Event.Delta is cumulative for []Message Runnables — see runnable.go
+				// godoc. Each frame's Delta holds the stage's complete output so far.
 				stageOut = ev.Delta
 				if !yield(ev, nil) {
 					return
 				}
 			}
-			transcript = append(transcript, stageOut...)
+			// Defensive: a stage that violated the Runnable.Stream contract by
+			// emitting zero frames or no terminal Done frame would otherwise
+			// leave the consumer waiting. On the last stage we synthesise the
+			// terminal frame so downstream consumers see the Done they're
+			// promised. Mid-pipeline we just thread whatever stageOut we have.
+			if isLast && !sawDone {
+				if !yield(Event[[]Message]{Delta: stageOut, Done: true}, nil) {
+					return
+				}
+			}
+			transcript = append(slices.Clip(transcript), stageOut...)
 		}
 	}
 }

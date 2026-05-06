@@ -18,11 +18,18 @@ type RouteFunc func(ctx context.Context, in []Message) (string, error)
 // Router(nil, ...) and Router(_, nil/empty map) panic — both are programming bugs.
 //
 // If decide returns an error, or returns a key absent from routes, the error
-// is wrapped in *RouteError. If the chosen agent itself errors, that error
-// passes through bare.
+// is wrapped in *RouteError. The unknown-key case wraps [ErrNoRoute], so
+// callers can write errors.Is(err, fugue.ErrNoRoute) to distinguish it from
+// a decide-itself-failed error. If the chosen agent itself errors, that
+// error passes through bare.
+//
+// RouteFunc returns only (key, error) — it cannot transform the input passed
+// to the chosen agent. If you need that, wrap the chosen agents in
+// [AgentFunc] adapters that do the transformation.
 //
 // Stream passes through the chosen agent's stream verbatim — full provider-
-// level token streaming through Router.
+// level token streaming through Router. decide runs lazily on the consumer's
+// first iteration of the returned sequence, not at Stream call time.
 func Router(decide RouteFunc, routes map[string]Agent) Agent {
 	if decide == nil {
 		panic("fugue: Router() requires a non-nil decide function")
@@ -70,8 +77,10 @@ func (r *router) Stream(ctx context.Context, in []Message) iter.Seq2[Event[[]Mes
 	}
 }
 
-// errNoRoute returns the sentinel-style error used inside *RouteError when
-// decide returned a key that doesn't exist in the routes map.
+// errNoRoute returns the error used inside *RouteError when decide returned
+// a key that doesn't exist in the routes map. It wraps the exported
+// [ErrNoRoute] sentinel so callers can use errors.Is to distinguish this
+// case from a decide-itself-failed RouteError.
 func errNoRoute(key string) error {
-	return fmt.Errorf("no route for %q", key)
+	return fmt.Errorf("%w for %q", ErrNoRoute, key)
 }
