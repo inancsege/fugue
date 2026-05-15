@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mustReflect runs reflectInputSchema on sample's type and returns the
@@ -191,4 +192,57 @@ func TestReflect_FugueEnumOnNonStringPanics(t *testing.T) {
 	if !strings.Contains(err.Error(), "fugueEnum") || !strings.Contains(err.Error(), "string") {
 		t.Errorf("error should mention fugueEnum on non-string, got: %v", err)
 	}
+}
+
+func expectReflectError(t *testing.T, sample any, wantSubstr string) {
+	t.Helper()
+	_, err := reflectInputSchema(reflect.TypeOf(sample))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error %q does not contain %q", err.Error(), wantSubstr)
+	}
+}
+
+func TestReflect_RejectChan(t *testing.T) {
+	type In struct {
+		Ch chan int `json:"ch"`
+	}
+	expectReflectError(t, In{}, "chan")
+}
+
+func TestReflect_RejectFunc(t *testing.T) {
+	type In struct {
+		Fn func() `json:"fn"`
+	}
+	expectReflectError(t, In{}, "func")
+}
+
+func TestReflect_RejectInterface(t *testing.T) {
+	type In struct {
+		Any any `json:"any"`
+	}
+	expectReflectError(t, In{}, "interface")
+}
+
+func TestReflect_RejectTimeTime(t *testing.T) {
+	type In struct {
+		At time.Time `json:"at"`
+	}
+	expectReflectError(t, In{}, "time.Time")
+}
+
+func TestReflect_RejectNonStringMapKey(t *testing.T) {
+	type In struct {
+		M map[int]string `json:"m"`
+	}
+	expectReflectError(t, In{}, "non-string key")
+}
+
+func TestReflect_RejectRecursiveType(t *testing.T) {
+	type Node struct {
+		Next *Node `json:"next"`
+	}
+	expectReflectError(t, Node{}, "recursive")
 }

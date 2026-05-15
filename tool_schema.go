@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 )
+
+// timeTimeType is cached for cheap equality checks in typeToSchema.
+var timeTimeType = reflect.TypeOf(time.Time{})
 
 // reflectInputSchema produces a JSON Schema Draft 7-ish object from a Go
 // type. The top-level type must be a struct (or pointer to struct). The
@@ -23,16 +27,26 @@ func reflectInputSchema(t reflect.Type) (json.RawMessage, error) {
 	if t.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("fugue.Tool: input type must be a struct (or pointer to struct), got %s", t.Kind())
 	}
-	return structSchema(t, "")
+	visited := map[reflect.Type]bool{}
+	return structSchemaVisited(t, "", visited)
 }
 
-// structSchema builds a JSON Schema object for a struct type. path is the
-// dotted field path used for error messages (empty at the top level).
+// structSchemaVisited builds a JSON Schema object for a struct type. path is
+// the dotted field path used for error messages (empty at the top level).
+// visited tracks struct types currently on the recursion stack to detect
+// recursive types; the defer-delete ensures sibling fields of the same type
+// are not falsely flagged.
 //
 // Properties are emitted in struct-declaration order via a manual JSON
 // build — encoding/json sorts map keys alphabetically, and we want stable,
 // declaration-ordered output for readability.
-func structSchema(t reflect.Type, path string) (json.RawMessage, error) {
+func structSchemaVisited(t reflect.Type, path string, visited map[reflect.Type]bool) (json.RawMessage, error) {
+	if visited[t] {
+		return nil, fmt.Errorf("fugue.Tool: field %q is a recursive type %s; recursive types are not supported in v1 — use RawTool", path, t.String())
+	}
+	visited[t] = true
+	defer delete(visited, t)
+
 	type prop struct {
 		name   string
 		schema json.RawMessage
@@ -53,7 +67,7 @@ func structSchema(t reflect.Type, path string) (json.RawMessage, error) {
 		if path == "" {
 			fieldPath = f.Name
 		}
-		propSchema, fieldRequired, err := fieldSchema(f, fieldPath)
+		propSchema, fieldRequired, err := fieldSchemaVisited(f, fieldPath, visited)
 		if err != nil {
 			return nil, err
 		}
@@ -91,12 +105,12 @@ func structSchema(t reflect.Type, path string) (json.RawMessage, error) {
 	return json.RawMessage(b.String()), nil
 }
 
-// fieldSchema builds a JSON Schema for a single struct field, and reports
-// whether the field is required before omitempty adjustment. Pointer fields
-// are non-required (pointer semantics: nil means absent). Description from
-// the `fugue:` tag and enum from the `fugueEnum:` tag are layered into the
-// resulting schema.
-func fieldSchema(f reflect.StructField, path string) (schema json.RawMessage, required bool, err error) {
+// fieldSchemaVisited builds a JSON Schema for a single struct field, and
+// reports whether the field is required before omitempty adjustment. Pointer
+// fields are non-required (pointer semantics: nil means absent). Description
+// from the `fugue:` tag and enum from the `fugueEnum:` tag are layered into
+// the resulting schema.
+func fieldSchemaVisited(f reflect.StructField, path string, visited map[reflect.Type]bool) (schema json.RawMessage, required bool, err error) {
 	desc := f.Tag.Get("fugue")
 	enumTag := f.Tag.Get("fugueEnum")
 	fieldType := f.Type
@@ -111,7 +125,7 @@ func fieldSchema(f reflect.StructField, path string) (schema json.RawMessage, re
 		return nil, false, fmt.Errorf("fugue.Tool: field %q: fugueEnum is only valid on string fields, got %s", path, checkType.Kind())
 	}
 
-	s, err := typeToSchema(fieldType, path)
+	s, err := typeToSchema(fieldType, path, visited)
 	if err != nil {
 		return nil, false, err
 	}
@@ -129,12 +143,18 @@ func fieldSchema(f reflect.StructField, path string) (schema json.RawMessage, re
 // includes the field path for unsupported types.
 //
 // json.RawMessage is special-cased to the "any JSON" empty-object schema
-// so users can pass arbitrary JSON through.
-func typeToSchema(t reflect.Type, path string) (json.RawMessage, error) {
+// so users can pass arbitrary JSON through. time.Time is explicitly rejected
+// with a helpful message pointing to string/int alternatives.
+func typeToSchema(t reflect.Type, path string, visited map[reflect.Type]bool) (json.RawMessage, error) {
 	// json.RawMessage is []byte under the hood — match by exact type so
 	// it doesn't fall into the generic slice path.
 	if t == reflect.TypeOf(json.RawMessage(nil)) {
 		return json.RawMessage(`{}`), nil
+	}
+	// time.Time is a struct but its zero-value semantics aren't expressible
+	// in JSON Schema, so reject explicitly and point users at RawTool.
+	if t == timeTimeType {
+		return nil, fmt.Errorf("fugue.Tool: field %q is time.Time; time.Time is not supported in v1 — use string (RFC3339) or int64 (unix), or use RawTool", path)
 	}
 	switch t.Kind() {
 	case reflect.String:
@@ -147,24 +167,30 @@ func typeToSchema(t reflect.Type, path string) (json.RawMessage, error) {
 	case reflect.Float32, reflect.Float64:
 		return json.RawMessage(`{"type":"number"}`), nil
 	case reflect.Pointer:
-		return typeToSchema(t.Elem(), path)
+		return typeToSchema(t.Elem(), path, visited)
 	case reflect.Slice, reflect.Array:
-		items, err := typeToSchema(t.Elem(), path+"[]")
+		items, err := typeToSchema(t.Elem(), path+"[]", visited)
 		if err != nil {
 			return nil, err
 		}
 		return json.RawMessage(`{"type":"array","items":` + string(items) + `}`), nil
 	case reflect.Map:
 		if t.Key().Kind() != reflect.String {
-			return nil, fmt.Errorf("fugue.Tool: field %q has map with non-string key %s", path, t.Key().String())
+			return nil, fmt.Errorf("fugue.Tool: field %q has map with non-string key %s; JSON object keys must be strings", path, t.Key().String())
 		}
-		val, err := typeToSchema(t.Elem(), path+"[v]")
+		val, err := typeToSchema(t.Elem(), path+"[v]", visited)
 		if err != nil {
 			return nil, err
 		}
 		return json.RawMessage(`{"type":"object","additionalProperties":` + string(val) + `}`), nil
 	case reflect.Struct:
-		return structSchema(t, path)
+		return structSchemaVisited(t, path, visited)
+	case reflect.Interface:
+		return nil, fmt.Errorf("fugue.Tool: field %q has interface type; interface fields are ambiguous — use json.RawMessage for arbitrary JSON or a concrete struct", path)
+	case reflect.Chan:
+		return nil, fmt.Errorf("fugue.Tool: field %q has chan type; channels cannot be represented in JSON Schema — use RawTool", path)
+	case reflect.Func:
+		return nil, fmt.Errorf("fugue.Tool: field %q has func type; functions cannot be represented in JSON Schema — use RawTool", path)
 	}
 	return nil, fmt.Errorf("fugue.Tool: field %q has unsupported type %s", path, t.String())
 }
