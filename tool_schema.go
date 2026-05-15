@@ -116,7 +116,7 @@ func primitiveSchema(t reflect.Type, path string) (json.RawMessage, error) {
 	case reflect.Bool:
 		return json.RawMessage(`{"type":"boolean"}`), nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return json.RawMessage(`{"type":"integer"}`), nil
 	case reflect.Float32, reflect.Float64:
 		return json.RawMessage(`{"type":"number"}`), nil

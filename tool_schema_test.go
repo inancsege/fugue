@@ -68,6 +68,16 @@ func TestReflect_FloatFields(t *testing.T) {
 	}
 }
 
+func TestReflect_BareUintField(t *testing.T) {
+	type In struct {
+		Count uint `json:"count"`
+	}
+	got := mustReflect(t, In{})
+	if !strings.Contains(string(got), `"count":{"type":"integer"}`) {
+		t.Errorf("expected count:{type:integer}, got: %s", got)
+	}
+}
+
 func TestReflect_NonStructTopLevelRejected(t *testing.T) {
 	_, err := reflectInputSchema(reflect.TypeOf("hello"))
 	if err == nil {
