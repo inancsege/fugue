@@ -87,3 +87,62 @@ func TestReflect_NonStructTopLevelRejected(t *testing.T) {
 		t.Errorf("error should mention struct, got: %v", err)
 	}
 }
+
+func TestReflect_SliceOfString(t *testing.T) {
+	type In struct {
+		Tags []string `json:"tags"`
+	}
+	got := mustReflect(t, In{})
+	if !strings.Contains(string(got), `"tags":{"type":"array","items":{"type":"string"}}`) {
+		t.Errorf("schema = %s", got)
+	}
+}
+
+func TestReflect_MapStringToInt(t *testing.T) {
+	type In struct {
+		Counts map[string]int `json:"counts"`
+	}
+	got := mustReflect(t, In{})
+	if !strings.Contains(string(got), `"counts":{"type":"object","additionalProperties":{"type":"integer"}}`) {
+		t.Errorf("schema = %s", got)
+	}
+}
+
+func TestReflect_PointerFieldNotRequired(t *testing.T) {
+	type In struct {
+		Optional *string `json:"opt"`
+		Required string  `json:"req"`
+	}
+	got := mustReflect(t, In{})
+	// "opt" should NOT appear in required; "req" should.
+	if strings.Contains(string(got), `"required":["opt"`) || strings.Contains(string(got), `"opt","req"`) {
+		t.Errorf("pointer field opt should not be required: %s", got)
+	}
+	if !strings.Contains(string(got), `"required":["req"]`) {
+		t.Errorf("required should be [req], got: %s", got)
+	}
+	// "opt" should still be in properties with the underlying type schema.
+	if !strings.Contains(string(got), `"opt":{"type":"string"}`) {
+		t.Errorf("opt property missing or wrong: %s", got)
+	}
+}
+
+func TestReflect_OmitemptyDropsRequired(t *testing.T) {
+	type In struct {
+		Limit int `json:"limit,omitempty"`
+	}
+	got := mustReflect(t, In{})
+	if strings.Contains(string(got), `"required"`) {
+		t.Errorf("omitempty field should not appear in required: %s", got)
+	}
+}
+
+func TestReflect_JSONRawMessageIsAny(t *testing.T) {
+	type In struct {
+		Blob json.RawMessage `json:"blob"`
+	}
+	got := mustReflect(t, In{})
+	if !strings.Contains(string(got), `"blob":{}`) {
+		t.Errorf("expected blob:{}, got: %s", got)
+	}
+}

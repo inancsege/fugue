@@ -92,24 +92,35 @@ func structSchema(t reflect.Type, path string) (json.RawMessage, error) {
 }
 
 // fieldSchema builds a JSON Schema for a single struct field, and reports
-// whether the field is required (before omitempty adjustments handled in
-// structSchema). In this task only primitives are supported; later tasks
-// extend primitiveSchema to handle slices, maps, pointers, structs, etc.
+// whether the field is required before omitempty adjustment. Pointer fields
+// are non-required (pointer semantics: nil means absent); omitempty handling
+// happens in structSchema.
 func fieldSchema(f reflect.StructField, path string) (schema json.RawMessage, required bool, err error) {
 	desc := f.Tag.Get("fugue")
-	primitive, err := primitiveSchema(f.Type, path)
+	fieldType := f.Type
+	required = fieldType.Kind() != reflect.Pointer
+	s, err := typeToSchema(fieldType, path)
 	if err != nil {
 		return nil, false, err
 	}
 	if desc != "" {
-		primitive = injectDescription(primitive, desc)
+		s = injectDescription(s, desc)
 	}
-	return primitive, true, nil
+	return s, required, nil
 }
 
-// primitiveSchema handles the scalar types only. Other kinds return an error
-// in this task and will be supported in later tasks.
-func primitiveSchema(t reflect.Type, path string) (json.RawMessage, error) {
+// typeToSchema produces a JSON Schema fragment for a Go type. Container
+// kinds (slice, map, pointer) recurse. Returns an error whose message
+// includes the field path for unsupported types.
+//
+// json.RawMessage is special-cased to the "any JSON" empty-object schema
+// so users can pass arbitrary JSON through.
+func typeToSchema(t reflect.Type, path string) (json.RawMessage, error) {
+	// json.RawMessage is []byte under the hood — match by exact type so
+	// it doesn't fall into the generic slice path.
+	if t == reflect.TypeOf(json.RawMessage(nil)) {
+		return json.RawMessage(`{}`), nil
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return json.RawMessage(`{"type":"string"}`), nil
@@ -120,6 +131,25 @@ func primitiveSchema(t reflect.Type, path string) (json.RawMessage, error) {
 		return json.RawMessage(`{"type":"integer"}`), nil
 	case reflect.Float32, reflect.Float64:
 		return json.RawMessage(`{"type":"number"}`), nil
+	case reflect.Pointer:
+		return typeToSchema(t.Elem(), path)
+	case reflect.Slice, reflect.Array:
+		items, err := typeToSchema(t.Elem(), path+"[]")
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(`{"type":"array","items":` + string(items) + `}`), nil
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			return nil, fmt.Errorf("fugue.Tool: field %q has map with non-string key %s", path, t.Key().String())
+		}
+		val, err := typeToSchema(t.Elem(), path+"[v]")
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(`{"type":"object","additionalProperties":` + string(val) + `}`), nil
+	case reflect.Struct:
+		return structSchema(t, path)
 	}
 	return nil, fmt.Errorf("fugue.Tool: field %q has unsupported type %s", path, t.String())
 }
