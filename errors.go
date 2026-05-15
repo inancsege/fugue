@@ -53,3 +53,17 @@ func (e *RouteError) Error() string {
 }
 
 func (e *RouteError) Unwrap() error { return e.Err }
+
+// ToolLoopError is returned when an agent's tool-use loop exceeds its step
+// budget (set via the provider's WithMaxSteps option). Steps reports the
+// budget that was exhausted.
+//
+// ToolLoopError does not Unwrap — there is no underlying cause; the loop
+// simply did not converge before the budget was hit.
+type ToolLoopError struct {
+	Steps int
+}
+
+func (e *ToolLoopError) Error() string {
+	return fmt.Sprintf("fugue: tool-use loop exceeded %d steps", e.Steps)
+}
