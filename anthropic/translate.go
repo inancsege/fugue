@@ -90,7 +90,7 @@ func toAPIMessages(in []fugue.Message) ([]sdk.MessageParam, error) {
 				if tm.ToolCallID == "" {
 					return nil, errors.New("anthropic: RoleTool message requires ToolCallID")
 				}
-				blocks = append(blocks, sdk.NewToolResultBlock(tm.ToolCallID, partsToText(tm.Content), false))
+				blocks = append(blocks, sdk.NewToolResultBlock(tm.ToolCallID, partsToText(tm.Content), tm.IsError))
 				i++
 			}
 			out = append(out, sdk.NewUserMessage(blocks...))

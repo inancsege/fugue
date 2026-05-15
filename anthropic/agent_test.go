@@ -672,3 +672,34 @@ func TestStream_CumulativeDeltas(t *testing.T) {
 		}
 	}
 }
+
+func TestToAPIMessages_RoleToolIsErrorPropagates(t *testing.T) {
+	in := []fugue.Message{
+		msg(fugue.RoleUser, "weather please"),
+		{
+			Role: fugue.RoleAssistant,
+			ToolCalls: []fugue.ToolCall{{
+				ID: "toolu_1", Name: "weather", Arguments: json.RawMessage(`{}`),
+			}},
+		},
+		{
+			Role:       fugue.RoleTool,
+			ToolCallID: "toolu_1",
+			Content:    []fugue.Part{fugue.Text{Text: "rate limited"}},
+			IsError:    true,
+		},
+	}
+	got, err := toAPIMessages(in)
+	if err != nil {
+		t.Fatalf("toAPIMessages: %v", err)
+	}
+	for _, b := range got[2].Content {
+		if b.OfToolResult != nil && b.OfToolResult.ToolUseID == "toolu_1" {
+			if b.OfToolResult.IsError.Value != true {
+				t.Errorf("IsError = %v, want true", b.OfToolResult.IsError.Value)
+			}
+			return
+		}
+	}
+	t.Fatal("expected tool_result block with IsError=true")
+}

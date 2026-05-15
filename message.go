@@ -39,6 +39,7 @@ type Message struct {
 	ToolCalls  []ToolCall
 	ToolCallID string // set when Role == RoleTool
 	Name       string
+	IsError    bool // when Role == RoleTool, marks the tool_result as a failure
 }
 
 // Part is a sealed interface for message content blocks.
