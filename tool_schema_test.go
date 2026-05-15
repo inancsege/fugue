@@ -146,3 +146,49 @@ func TestReflect_JSONRawMessageIsAny(t *testing.T) {
 		t.Errorf("expected blob:{}, got: %s", got)
 	}
 }
+
+func TestReflect_NestedStruct(t *testing.T) {
+	type Inner struct {
+		X int `json:"x"`
+	}
+	type In struct {
+		I Inner `json:"i"`
+	}
+	got := mustReflect(t, In{})
+	if !strings.Contains(string(got), `"i":{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]}`) {
+		t.Errorf("schema = %s", got)
+	}
+}
+
+func TestReflect_FugueEnum(t *testing.T) {
+	type In struct {
+		Mode string `json:"mode" fugueEnum:"semantic,exact,fuzzy"`
+	}
+	got := mustReflect(t, In{})
+	if !strings.Contains(string(got), `"mode":{"enum":["semantic","exact","fuzzy"],"type":"string"}`) {
+		t.Errorf("schema = %s", got)
+	}
+}
+
+func TestReflect_FugueEnumWithDescription(t *testing.T) {
+	type In struct {
+		Mode string `json:"mode" fugue:"search mode" fugueEnum:"a,b"`
+	}
+	got := mustReflect(t, In{})
+	if !strings.Contains(string(got), `"description":"search mode"`) || !strings.Contains(string(got), `"enum":["a","b"]`) {
+		t.Errorf("schema = %s", got)
+	}
+}
+
+func TestReflect_FugueEnumOnNonStringPanics(t *testing.T) {
+	type In struct {
+		N int `json:"n" fugueEnum:"1,2,3"`
+	}
+	_, err := reflectInputSchema(reflect.TypeOf(In{}))
+	if err == nil {
+		t.Fatal("expected error for fugueEnum on non-string field")
+	}
+	if !strings.Contains(err.Error(), "fugueEnum") || !strings.Contains(err.Error(), "string") {
+		t.Errorf("error should mention fugueEnum on non-string, got: %v", err)
+	}
+}

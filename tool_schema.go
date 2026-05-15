@@ -93,15 +93,30 @@ func structSchema(t reflect.Type, path string) (json.RawMessage, error) {
 
 // fieldSchema builds a JSON Schema for a single struct field, and reports
 // whether the field is required before omitempty adjustment. Pointer fields
-// are non-required (pointer semantics: nil means absent); omitempty handling
-// happens in structSchema.
+// are non-required (pointer semantics: nil means absent). Description from
+// the `fugue:` tag and enum from the `fugueEnum:` tag are layered into the
+// resulting schema.
 func fieldSchema(f reflect.StructField, path string) (schema json.RawMessage, required bool, err error) {
 	desc := f.Tag.Get("fugue")
+	enumTag := f.Tag.Get("fugueEnum")
 	fieldType := f.Type
 	required = fieldType.Kind() != reflect.Pointer
+
+	// fugueEnum is only valid on string fields (also on *string via pointer).
+	checkType := fieldType
+	if checkType.Kind() == reflect.Pointer {
+		checkType = checkType.Elem()
+	}
+	if enumTag != "" && checkType.Kind() != reflect.String {
+		return nil, false, fmt.Errorf("fugue.Tool: field %q: fugueEnum is only valid on string fields, got %s", path, checkType.Kind())
+	}
+
 	s, err := typeToSchema(fieldType, path)
 	if err != nil {
 		return nil, false, err
+	}
+	if enumTag != "" {
+		s = injectEnum(s, enumTag)
 	}
 	if desc != "" {
 		s = injectDescription(s, desc)
@@ -178,6 +193,33 @@ func parseJSONTag(f reflect.StructField) (name string, omitempty bool, skip bool
 		}
 	}
 	return name, omitempty, false
+}
+
+// injectEnum inserts an "enum" key into a string schema. The enum is parsed
+// from a comma-separated list (the fugueEnum tag value); each value is
+// trimmed and emitted as a JSON string. Order is preserved from the tag.
+func injectEnum(schema json.RawMessage, tag string) json.RawMessage {
+	values := strings.Split(tag, ",")
+	var enumJSON strings.Builder
+	enumJSON.WriteString(`"enum":[`)
+	for i, v := range values {
+		if i > 0 {
+			enumJSON.WriteByte(',')
+		}
+		enumJSON.WriteString(jsonQuote(strings.TrimSpace(v)))
+	}
+	enumJSON.WriteByte(']')
+
+	s := string(schema)
+	if !strings.HasPrefix(s, "{") {
+		return schema
+	}
+	inner := s[1:]
+	insert := enumJSON.String()
+	if len(inner) > 1 {
+		insert += ","
+	}
+	return json.RawMessage("{" + insert + inner)
 }
 
 // injectDescription returns schema with a "description" key inserted at the
