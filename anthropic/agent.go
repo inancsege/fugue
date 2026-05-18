@@ -38,7 +38,18 @@ func New(model string, opts ...Option) fugue.Agent {
 		c := sdk.NewClient(clientOpts...)
 		cfg.client = &c
 	}
-	return &agent{model: model, cfg: cfg}
+	var toolParams []sdk.ToolUnionParam
+	if len(cfg.tools) > 0 {
+		toolParams = make([]sdk.ToolUnionParam, 0, len(cfg.tools))
+		for _, t := range cfg.tools {
+			tp, err := toolDefToSDKToolUnion(t)
+			if err != nil {
+				panic("anthropic.New: " + err.Error())
+			}
+			toolParams = append(toolParams, tp)
+		}
+	}
+	return &agent{model: model, cfg: cfg, toolParam: toolParams}
 }
 
 // Option configures an agent at construction.
@@ -75,8 +86,9 @@ func WithTemperature(t float64) Option { return func(c *config) { c.temperature 
 func WithClient(client *sdk.Client) Option { return func(c *config) { c.client = client } }
 
 type agent struct {
-	model string
-	cfg   config
+	model     string
+	cfg       config
+	toolParam []sdk.ToolUnionParam // cached at construction
 }
 
 func (a *agent) Invoke(ctx context.Context, in []fugue.Message) ([]fugue.Message, error) {
@@ -152,6 +164,9 @@ func (a *agent) buildParams(in []fugue.Message) (sdk.MessageNewParams, error) {
 	}
 	if a.cfg.temperature != nil {
 		params.Temperature = sdk.Float(*a.cfg.temperature)
+	}
+	if len(a.toolParam) > 0 {
+		params.Tools = a.toolParam
 	}
 	return params, nil
 }

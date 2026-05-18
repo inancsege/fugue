@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -178,4 +179,48 @@ func fromAPIResponse(resp *sdk.Message) (fugue.Message, error) {
 	}
 	out.Name = string(resp.StopReason)
 	return out, nil
+}
+
+// toolDefToSDKToolUnion translates a fugue.ToolDef into an Anthropic
+// ToolUnionParam (variant: OfTool). The ToolDef's schema is the full
+// JSON-Schema object {type:object, properties:..., required:...}; we parse
+// it once and place properties/required into the SDK's typed shape.
+//
+// An invalid schema (cannot parse as a JSON object, or properties not an
+// object) returns an error. Callers (the anthropic agent constructor) should
+// panic on this — it indicates a buggy RawTool schema, not a runtime
+// condition.
+func toolDefToSDKToolUnion(td fugue.ToolDef) (sdk.ToolUnionParam, error) {
+	schema := td.Schema()
+	if len(schema) == 0 {
+		// No schema (e.g., RawTool called with nil schema) — emit empty
+		// object schema so the API accepts it.
+		schema = json.RawMessage(`{"type":"object"}`)
+	}
+	var parsed struct {
+		Properties json.RawMessage `json:"properties"`
+		Required   []string        `json:"required"`
+	}
+	if err := json.Unmarshal(schema, &parsed); err != nil {
+		return sdk.ToolUnionParam{}, fmt.Errorf("anthropic: tool %q has invalid JSON schema: %w", td.Name(), err)
+	}
+	var props any
+	if len(parsed.Properties) > 0 {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(parsed.Properties, &m); err != nil {
+			return sdk.ToolUnionParam{}, fmt.Errorf("anthropic: tool %q properties must be a JSON object: %w", td.Name(), err)
+		}
+		props = m
+	}
+	param := sdk.ToolParam{
+		Name: td.Name(),
+		InputSchema: sdk.ToolInputSchemaParam{
+			Properties: props,
+			Required:   parsed.Required,
+		},
+	}
+	if td.Description() != "" {
+		param.Description = sdk.String(td.Description())
+	}
+	return sdk.ToolUnionParam{OfTool: &param}, nil
 }

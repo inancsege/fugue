@@ -747,3 +747,39 @@ func TestWithTools_CrossCallDuplicatePanics(t *testing.T) {
 		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
 	New("claude-sonnet-4-6", WithTools(t1), WithTools(t2))
 }
+
+func TestBuildParams_InjectsTools(t *testing.T) {
+	tool := fugue.RawTool("search", "search the corpus",
+		json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
+	a := New("claude-sonnet-4-6", WithTools(tool)).(*agent)
+
+	params, err := a.buildParams([]fugue.Message{msg(fugue.RoleUser, "hi")})
+	if err != nil {
+		t.Fatalf("buildParams: %v", err)
+	}
+	if len(params.Tools) != 1 {
+		t.Fatalf("want 1 tool in params, got %d", len(params.Tools))
+	}
+	got := params.Tools[0].OfTool
+	if got == nil {
+		t.Fatal("OfTool should be set")
+	}
+	if got.Name != "search" {
+		t.Errorf("Name = %q, want search", got.Name)
+	}
+	if got.Description.Value != "search the corpus" {
+		t.Errorf("Description = %q, want search the corpus", got.Description.Value)
+	}
+	// Properties.q should be present.
+	propsBytes, err := json.Marshal(got.InputSchema.Properties)
+	if err != nil {
+		t.Fatalf("marshal properties: %v", err)
+	}
+	if !strings.Contains(string(propsBytes), `"q":{"type":"string"}`) {
+		t.Errorf("properties = %s, want q:{type:string}", propsBytes)
+	}
+	if len(got.InputSchema.Required) != 1 || got.InputSchema.Required[0] != "q" {
+		t.Errorf("Required = %v, want [q]", got.InputSchema.Required)
+	}
+}
