@@ -270,3 +270,82 @@ func TestInvokeWithTools_ToolLoopErrorOnBudgetExhaustion(t *testing.T) {
 		t.Errorf("Steps = %d, want 3", loopErr.Steps)
 	}
 }
+
+// toolUseSSEResponse builds a streaming SSE response that emits one tool_use
+// block (input arrives in two json_delta chunks) and ends with message_stop.
+func toolUseSSEResponse(toolName, toolID string) *http.Response {
+	events := []string{
+		`event: message_start
+data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-6","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}
+
+`,
+		`event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"` + toolID + `","name":"` + toolName + `","input":{}}}
+
+`,
+		`event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"q\":\""}}
+
+`,
+		`event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"x\"}"}}
+
+`,
+		`event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+`,
+		`event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":2}}
+
+`,
+		`event: message_stop
+data: {"type":"message_stop"}
+
+`,
+	}
+	return sseResponse(events...)
+}
+
+func TestStreamWithTools_DoneOnlyOnFinalTurn(t *testing.T) {
+	tool := fugue.RawTool("search", "search", json.RawMessage(`{"type":"object"}`),
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"hits":[]}`), nil
+		})
+	ft := &fakeTransport{responses: []*http.Response{
+		toolUseSSEResponse("search", "u1"),
+		streamingResponseTwoTextDeltas(),
+	}}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft, WithTools(tool))
+
+	var frames []fugue.Event[[]fugue.Message]
+	for ev, err := range a.Stream(context.Background(), []fugue.Message{msg(fugue.RoleUser, "go")}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		frames = append(frames, ev)
+	}
+	if len(frames) == 0 {
+		t.Fatal("expected frames")
+	}
+	for i, f := range frames[:len(frames)-1] {
+		if f.Done {
+			t.Errorf("frame %d should have Done=false (intermediate turn)", i)
+		}
+	}
+	if !frames[len(frames)-1].Done {
+		t.Errorf("final frame must have Done=true")
+	}
+	// Final cumulative trace must contain the tool_use turn, the tool_result,
+	// and the final assistant text.
+	final := frames[len(frames)-1].Delta
+	if len(final) < 3 {
+		t.Fatalf("final trace too short, got %d messages: %+v", len(final), final)
+	}
+	if final[0].Role != fugue.RoleAssistant || len(final[0].ToolCalls) == 0 {
+		t.Errorf("final[0] should be assistant tool_use, got %+v", final[0])
+	}
+	if final[1].Role != fugue.RoleTool {
+		t.Errorf("final[1] should be tool result, got %+v", final[1])
+	}
+}

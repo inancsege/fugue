@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
+	"slices"
 	"sync"
 
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/inancsege/fugue"
 )
 
@@ -159,4 +162,77 @@ func (a *agent) runTools(ctx context.Context, calls []fugue.ToolCall) ([]fugue.M
 		}
 	}
 	return results, nil
+}
+
+// streamWithTools is the Stream-side counterpart to invokeWithTools. Each
+// model turn streams its own SSE frames inline. Done=true appears only on
+// the terminal frame of the terminal turn (one with no tool_use blocks).
+// Delta is cumulative for the whole trace produced so far.
+//
+// Tool execution is silent in the stream — no synthetic frames between
+// turns. Consumers detect "tools in flight" by inspecting Delta's last
+// Message for ToolCalls.
+func (a *agent) streamWithTools(ctx context.Context, in []fugue.Message) iter.Seq2[fugue.Event[[]fugue.Message], error] {
+	return func(yield func(fugue.Event[[]fugue.Message], error) bool) {
+		history := append([]fugue.Message(nil), in...)
+		var produced []fugue.Message
+		budget := a.cfg.maxSteps
+		if budget <= 0 {
+			budget = 8
+		}
+
+		for step := 0; step < budget; step++ {
+			params, err := a.buildParams(history)
+			if err != nil {
+				yield(fugue.Event[[]fugue.Message]{}, err)
+				return
+			}
+			stream := a.cfg.client.Messages.NewStreaming(ctx, params)
+			var acc sdk.Message
+			var lastMsg fugue.Message
+			for stream.Next() {
+				ev := stream.Current()
+				if err := acc.Accumulate(ev); err != nil {
+					stream.Close()
+					yield(fugue.Event[[]fugue.Message]{}, err)
+					return
+				}
+				partial, err := fromAPIResponse(&acc)
+				if err != nil {
+					stream.Close()
+					yield(fugue.Event[[]fugue.Message]{}, err)
+					return
+				}
+				lastMsg = partial
+				isTurnEnd := ev.Type == "message_stop"
+				done := isTurnEnd && len(partial.ToolCalls) == 0
+				delta := append(slices.Clone(produced), partial)
+				if !yield(fugue.Event[[]fugue.Message]{Delta: delta, Done: done}, nil) {
+					stream.Close()
+					return
+				}
+			}
+			if err := stream.Err(); err != nil {
+				stream.Close()
+				yield(fugue.Event[[]fugue.Message]{}, err)
+				return
+			}
+			stream.Close()
+			produced = append(produced, lastMsg)
+			history = append(history, lastMsg)
+
+			if len(lastMsg.ToolCalls) == 0 {
+				return // Done frame already sent above.
+			}
+
+			results, err := a.runTools(ctx, lastMsg.ToolCalls)
+			if err != nil {
+				yield(fugue.Event[[]fugue.Message]{}, err)
+				return
+			}
+			produced = append(produced, results...)
+			history = append(history, results...)
+		}
+		yield(fugue.Event[[]fugue.Message]{}, &fugue.ToolLoopError{Steps: budget})
+	}
 }

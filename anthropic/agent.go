@@ -111,6 +111,9 @@ func (a *agent) Invoke(ctx context.Context, in []fugue.Message) ([]fugue.Message
 }
 
 func (a *agent) Stream(ctx context.Context, in []fugue.Message) iter.Seq2[fugue.Event[[]fugue.Message], error] {
+	if len(a.cfg.tools) > 0 {
+		return a.streamWithTools(ctx, in)
+	}
 	return func(yield func(fugue.Event[[]fugue.Message], error) bool) {
 		params, err := a.buildParams(in)
 		if err != nil {
