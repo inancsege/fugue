@@ -51,8 +51,7 @@ A few decisions are locked. They shape everything that follows.
 - **One `Runnable[I, O]` interface** for agents and combinators alike, carrying both `Invoke`
   and `Stream`. Streaming uses Go 1.23's `iter.Seq2`.
 - **Typed tools.** Tool input/output schemas come from Go struct tags via reflection — not
-  hand-written JSON schema, not a YAML descriptor. _Not yet shipped — Anthropic adapter
-  passes tool calls through raw for now._
+  hand-written JSON schema, not a YAML descriptor.
 
 ## Combinators
 
@@ -127,6 +126,78 @@ pipeline := fugue.Sequential(logging, claude)
 
 Mirrors `http.HandlerFunc`. `Stream` lifts `Invoke` into a single `Done=true` frame; implement
 the `Agent` interface directly when you need real per-token streaming.
+
+## Tools
+
+Define a tool as a plain Go function with a struct input. fugue reflects the
+struct into a JSON Schema and threads `(args → fn → result)` through the
+provider's tool-use loop.
+
+```go
+type SearchIn struct {
+    Query string `json:"query" fugue:"the search query"`
+    Limit int    `json:"limit,omitempty" fugue:"max results, default 10"`
+}
+type SearchOut struct {
+    Hits []string `json:"hits"`
+}
+
+func search(ctx context.Context, in SearchIn) (SearchOut, error) {
+    // ...
+    return SearchOut{Hits: []string{"first"}}, nil
+}
+
+agent := anthropic.New("claude-sonnet-4-6",
+    anthropic.WithSystemPrompt("Answer with the search tool."),
+    anthropic.WithTools(fugue.Tool("search", "Search the corpus", search)),
+    anthropic.WithMaxSteps(8),
+)
+
+out, err := agent.Invoke(ctx, []fugue.Message{{
+    Role: fugue.RoleUser, Content: []fugue.Part{fugue.Text{Text: "find: hello"}},
+}})
+```
+
+`Invoke` returns the **full trace**: each assistant turn (including
+`tool_use` blocks) and each `tool_result` in order, ending with the final
+text turn. `Sequential` threads the trace into the next stage.
+
+### Schema reflection
+
+| Go type | JSON Schema |
+|---|---|
+| `string`, `bool` | `string`, `boolean` |
+| `int*`, `uint*` | `integer` |
+| `float32`, `float64` | `number` |
+| `[]T`, `map[string]T` | `array` / `object` (`additionalProperties`) |
+| nested struct | `object` |
+| `*T` | same as `T`, not required |
+| `json.RawMessage` | `{}` (any JSON) |
+
+Tags:
+- `json:"name,omitempty"` — wire name; `omitempty` (or `*T`) marks not-required.
+- `fugue:"..."` — property description shown to the model.
+- `fugueEnum:"a,b,c"` — string enum (only on `string` fields).
+
+Unsupported types (channels, functions, `any`, `time.Time`, recursive structs,
+non-string map keys) panic at `fugue.Tool(...)` construction with a message
+including the field path — these are programming bugs, not runtime errors.
+
+### Errors and the loop
+
+- A tool fn returning `error` is *not* fatal. fugue feeds the error back to
+  the model as `tool_result{is_error: true}` so it can retry, route, or
+  apologize. Tool panics are recovered with the same treatment.
+- Programming-bug errors (e.g. an `Out` type that can't be JSON-marshaled)
+  bubble out of `Invoke` as transport errors.
+- If the model never stops requesting tools, the loop terminates with
+  `*fugue.ToolLoopError{Steps: N}` after `WithMaxSteps` turns (default 8).
+
+### Raw escape hatch
+
+For recursive schemas, provider-specific JSON Schema features, or non-struct
+outputs, use `fugue.RawTool(name, desc, schema, fn)` — same loop, you write
+the schema yourself.
 
 ## Streaming
 
