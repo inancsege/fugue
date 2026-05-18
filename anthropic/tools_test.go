@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -177,4 +178,95 @@ func asText(m fugue.Message) string {
 		}
 	}
 	return ""
+}
+
+// toolUseResponse builds a 200 JSON response with one tool_use block.
+func toolUseResponse(toolName, toolID, args string) *http.Response {
+	body := `{"id":"m","type":"message","role":"assistant","model":"claude-sonnet-4-6",
+	"content":[{"type":"tool_use","id":"` + toolID + `","name":"` + toolName + `","input":` + args + `}],
+	"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}`
+	return okResponse(body)
+}
+
+// textResponse builds a 200 JSON response with a final text block.
+func textResponse(text string) *http.Response {
+	body := `{"id":"m","type":"message","role":"assistant","model":"claude-sonnet-4-6",
+	"content":[{"type":"text","text":"` + text + `"}],
+	"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
+	return okResponse(body)
+}
+
+func TestInvokeWithTools_NoToolUseReturnsImmediately(t *testing.T) {
+	tool := fugue.RawTool("noop", "noop", json.RawMessage(`{"type":"object"}`),
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
+	ft := &fakeTransport{responses: []*http.Response{textResponse("hello")}}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft, WithTools(tool))
+
+	out, err := a.Invoke(context.Background(), []fugue.Message{msg(fugue.RoleUser, "hi")})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("want 1 message, got %d", len(out))
+	}
+	if len(ft.requests) != 1 {
+		t.Errorf("want 1 HTTP request, got %d", len(ft.requests))
+	}
+}
+
+func TestInvokeWithTools_OneToolThenFinalText(t *testing.T) {
+	tool := fugue.RawTool("search", "search", json.RawMessage(`{"type":"object"}`),
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"hits":["match"]}`), nil
+		})
+	ft := &fakeTransport{responses: []*http.Response{
+		toolUseResponse("search", "toolu_1", `{"query":"x"}`),
+		textResponse("found one match"),
+	}}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft, WithTools(tool))
+
+	out, err := a.Invoke(context.Background(), []fugue.Message{msg(fugue.RoleUser, "find x")})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	// Trace: assistant(tool_use), tool(result), assistant(final).
+	if len(out) != 3 {
+		t.Fatalf("want 3 messages in trace, got %d: %+v", len(out), out)
+	}
+	if out[0].Role != fugue.RoleAssistant || len(out[0].ToolCalls) != 1 {
+		t.Errorf("out[0] should be assistant with one tool_use, got %+v", out[0])
+	}
+	if out[1].Role != fugue.RoleTool || out[1].ToolCallID != "toolu_1" {
+		t.Errorf("out[1] should be tool result, got %+v", out[1])
+	}
+	if out[2].Role != fugue.RoleAssistant || asText(out[2]) != "found one match" {
+		t.Errorf("out[2] should be final assistant text, got %+v", out[2])
+	}
+	if len(ft.requests) != 2 {
+		t.Errorf("want 2 HTTP requests, got %d", len(ft.requests))
+	}
+}
+
+func TestInvokeWithTools_ToolLoopErrorOnBudgetExhaustion(t *testing.T) {
+	tool := fugue.RawTool("loop", "loop", json.RawMessage(`{"type":"object"}`),
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		})
+	// Always return tool_use → never converges.
+	resps := []*http.Response{
+		toolUseResponse("loop", "u1", `{}`),
+		toolUseResponse("loop", "u2", `{}`),
+		toolUseResponse("loop", "u3", `{}`),
+	}
+	ft := &fakeTransport{responses: resps}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft, WithTools(tool), WithMaxSteps(3))
+
+	_, err := a.Invoke(context.Background(), []fugue.Message{msg(fugue.RoleUser, "go")})
+	var loopErr *fugue.ToolLoopError
+	if !errors.As(err, &loopErr) {
+		t.Fatalf("want *ToolLoopError, got %T: %v", err, err)
+	}
+	if loopErr.Steps != 3 {
+		t.Errorf("Steps = %d, want 3", loopErr.Steps)
+	}
 }

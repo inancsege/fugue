@@ -92,6 +92,9 @@ type agent struct {
 }
 
 func (a *agent) Invoke(ctx context.Context, in []fugue.Message) ([]fugue.Message, error) {
+	if len(a.cfg.tools) > 0 {
+		return a.invokeWithTools(ctx, in)
+	}
 	params, err := a.buildParams(in)
 	if err != nil {
 		return nil, err

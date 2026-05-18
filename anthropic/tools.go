@@ -74,6 +74,52 @@ func toolErrorResult(id, msg string) fugue.Message {
 	}
 }
 
+// invokeWithTools runs the model→tool→model loop. Called from Invoke when
+// the agent has tools registered. Returns the full trace of newly-produced
+// messages (assistant turns and tool results) in order.
+//
+// On budget exhaustion, returns the trace produced so far along with a
+// *fugue.ToolLoopError. On transport-level failures (Messages.New error,
+// response parse error, runTools transport error, ctx cancel), returns the
+// partial trace and the underlying error.
+func (a *agent) invokeWithTools(ctx context.Context, in []fugue.Message) ([]fugue.Message, error) {
+	history := append([]fugue.Message(nil), in...)
+	var produced []fugue.Message
+	budget := a.cfg.maxSteps
+	if budget <= 0 {
+		budget = 8
+	}
+
+	for step := 0; step < budget; step++ {
+		params, err := a.buildParams(history)
+		if err != nil {
+			return produced, err
+		}
+		resp, err := a.cfg.client.Messages.New(ctx, params)
+		if err != nil {
+			return produced, err
+		}
+		msg, err := fromAPIResponse(resp)
+		if err != nil {
+			return produced, err
+		}
+		produced = append(produced, msg)
+		history = append(history, msg)
+
+		if len(msg.ToolCalls) == 0 {
+			return produced, nil
+		}
+
+		results, err := a.runTools(ctx, msg.ToolCalls)
+		if err != nil {
+			return produced, err
+		}
+		produced = append(produced, results...)
+		history = append(history, results...)
+	}
+	return produced, &fugue.ToolLoopError{Steps: budget}
+}
+
 // runTools dispatches each ToolCall in calls. Tools run concurrently;
 // results are returned in call order so the resulting tool_result blocks
 // match the tool_use ordering Anthropic requires.
