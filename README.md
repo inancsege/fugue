@@ -2,7 +2,7 @@
 
 Multi-voice agent orchestration for Go. Code-first composition — no YAML, no Markdown, just Go.
 
-> **Status:** v0, operational with Anthropic. The core API is stable. Some pieces are still missing — typed tools, the agent-as-tool primitive, more providers — but you can wire real multi-agent pipelines today.
+> **Status:** v0, operational with Anthropic. The core API is stable. Some pieces are still missing — the agent-as-tool primitive, more providers — but you can wire real multi-agent pipelines today.
 
 ## Why fugue
 
@@ -269,8 +269,10 @@ the providers you actually use.
   failing stage's index and partial state.
 - **`*RouteError`** for routing-layer failures (`Router` — `decide` errored, or returned an
   unknown key). Carries the failing key.
+- **`*ToolLoopError`** when a tool-use loop exceeds its step budget. Carries the
+  step count.
 
-Both wrap the underlying error and work with `errors.Is`/`errors.As`.
+All three work with `errors.As` to recover their typed values; `*StageError` and `*RouteError` also implement `Unwrap` (`*ToolLoopError` does not — there is no underlying cause).
 
 ## License
 

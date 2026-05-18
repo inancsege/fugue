@@ -44,11 +44,15 @@ func WithTools(tools ...fugue.ToolDef) Option {
 	}
 }
 
-// WithMaxSteps caps the number of model turns in a tool-use loop. A step is
-// one Messages.New call; tool execution within a step is not counted.
-// Default is 8 when tools are present, 1 otherwise. Setting MaxSteps=1
-// disables the loop (one model turn, no tool dispatch even if the model
-// emits tool_use).
+// WithMaxSteps caps the number of model turns in a tool-use loop. A step
+// is one Messages.New call; tool execution within a step is not counted.
+// Default is 8 when tools are present. WithMaxSteps has no effect when
+// WithTools is not also used — the non-tool path always makes exactly one
+// API call.
+//
+// Setting MaxSteps=1 allows one model turn; if the model requests tools
+// they are dispatched once, then *fugue.ToolLoopError{Steps:1} is returned.
+// To disable tool dispatch entirely, simply don't register any tools.
 func WithMaxSteps(n int) Option {
 	return func(c *config) {
 		c.maxSteps = n

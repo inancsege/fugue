@@ -261,13 +261,25 @@ func TestInvokeWithTools_ToolLoopErrorOnBudgetExhaustion(t *testing.T) {
 	ft := &fakeTransport{responses: resps}
 	a := newAgentWithTransport("claude-sonnet-4-6", ft, WithTools(tool), WithMaxSteps(3))
 
-	_, err := a.Invoke(context.Background(), []fugue.Message{msg(fugue.RoleUser, "go")})
+	out, err := a.Invoke(context.Background(), []fugue.Message{msg(fugue.RoleUser, "go")})
 	var loopErr *fugue.ToolLoopError
 	if !errors.As(err, &loopErr) {
 		t.Fatalf("want *ToolLoopError, got %T: %v", err, err)
 	}
 	if loopErr.Steps != 3 {
 		t.Errorf("Steps = %d, want 3", loopErr.Steps)
+	}
+	// Partial trace must contain all 3 model turns + all 3 tool results, in order.
+	if len(out) != 6 {
+		t.Fatalf("want partial trace of 6 messages (3 assistant + 3 tool result), got %d", len(out))
+	}
+	for i := 0; i < 6; i += 2 {
+		if out[i].Role != fugue.RoleAssistant || len(out[i].ToolCalls) != 1 {
+			t.Errorf("out[%d] should be assistant with one tool_use, got %+v", i, out[i])
+		}
+		if out[i+1].Role != fugue.RoleTool {
+			t.Errorf("out[%d] should be tool result, got %+v", i+1, out[i+1])
+		}
 	}
 }
 
@@ -347,5 +359,33 @@ func TestStreamWithTools_DoneOnlyOnFinalTurn(t *testing.T) {
 	}
 	if final[1].Role != fugue.RoleTool {
 		t.Errorf("final[1] should be tool result, got %+v", final[1])
+	}
+}
+
+func TestStreamWithTools_ToolLoopErrorOnBudgetExhaustion(t *testing.T) {
+	tool := fugue.RawTool("loop", "loop", json.RawMessage(`{"type":"object"}`),
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		})
+	ft := &fakeTransport{responses: []*http.Response{
+		toolUseSSEResponse("loop", "u1"),
+		toolUseSSEResponse("loop", "u2"),
+	}}
+	a := newAgentWithTransport("claude-sonnet-4-6", ft, WithTools(tool), WithMaxSteps(2))
+
+	var sawErr error
+	for ev, err := range a.Stream(context.Background(), []fugue.Message{msg(fugue.RoleUser, "go")}) {
+		if err != nil {
+			sawErr = err
+			break
+		}
+		_ = ev
+	}
+	var loopErr *fugue.ToolLoopError
+	if !errors.As(sawErr, &loopErr) {
+		t.Fatalf("want *ToolLoopError, got %T: %v", sawErr, sawErr)
+	}
+	if loopErr.Steps != 2 {
+		t.Errorf("Steps = %d, want 2", loopErr.Steps)
 	}
 }
