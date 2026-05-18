@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 )
 
 // ToolDef is a tool definition bound to an agent at construction.
@@ -44,6 +45,72 @@ func (t ToolDef) Schema() json.RawMessage { return t.schema }
 // Invoke must never panic; the typed constructors install recover guards.
 func (t ToolDef) Invoke(ctx context.Context, args json.RawMessage) (json.RawMessage, bool, error) {
 	return t.invoke(ctx, args)
+}
+
+// Tool wraps a typed Go function as a fugue tool.
+//
+// The In type is reflected into a JSON Schema (see reflectInputSchema for
+// supported types and tag conventions). Out is JSON-marshaled when the tool
+// returns. Both In and Out should be struct types — pass a json.RawMessage
+// field or use RawTool for non-struct shapes.
+//
+// Semantics:
+//   - args fail to unmarshal into In → tool_result{is_error:true, content: err.Error()}
+//   - fn returns non-nil error      → tool_result{is_error:true, content: err.Error()}
+//   - fn panics                      → tool_result{is_error:true, content: "tool panic: ..."}
+//   - out fails to marshal           → transport error (bubbles out of Invoke;
+//                                       this is a programming bug — Out contains
+//                                       a chan, func, etc.)
+//
+// Tool panics at construction if In's schema cannot be reflected, if name or
+// description is empty, or if fn is nil.
+func Tool[In, Out any](
+	name, description string,
+	fn func(ctx context.Context, in In) (Out, error),
+) ToolDef {
+	if name == "" {
+		panic("fugue.Tool: name must not be empty")
+	}
+	if description == "" {
+		panic("fugue.Tool: description must not be empty")
+	}
+	if fn == nil {
+		panic("fugue.Tool: fn must not be nil")
+	}
+	var zero In
+	schema, err := reflectInputSchema(reflect.TypeOf(zero))
+	if err != nil {
+		// reflectInputSchema errors already include the "fugue.Tool:" prefix.
+		panic(err.Error())
+	}
+
+	return ToolDef{
+		name:        name,
+		description: description,
+		schema:      schema,
+		invoke: func(ctx context.Context, args json.RawMessage) (out json.RawMessage, isError bool, transportErr error) {
+			defer func() {
+				if r := recover(); r != nil {
+					out = json.RawMessage(fmt.Sprintf("tool panic: %v", r))
+					isError = true
+					transportErr = nil
+				}
+			}()
+			var in In
+			if err := json.Unmarshal(args, &in); err != nil {
+				return json.RawMessage(err.Error()), true, nil
+			}
+			result, err := fn(ctx, in)
+			if err != nil {
+				return json.RawMessage(err.Error()), true, nil
+			}
+			outBytes, err := json.Marshal(result)
+			if err != nil {
+				return nil, false, fmt.Errorf("fugue.Tool %q: marshal output: %w", name, err)
+			}
+			return outBytes, false, nil
+		},
+	}
 }
 
 // RawTool wraps a raw JSON-in/JSON-out function as a fugue tool.

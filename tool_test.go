@@ -106,3 +106,95 @@ func TestToolDef_InvokeRecoversPanic(t *testing.T) {
 		t.Errorf("recovered panic message should contain 'kaboom', got %q", out)
 	}
 }
+
+type searchIn struct {
+	Query string `json:"query" fugue:"the search query"`
+	Limit int    `json:"limit,omitempty"`
+}
+type searchOut struct {
+	Hits []string `json:"hits"`
+}
+
+func TestTool_HappyPath(t *testing.T) {
+	tool := Tool("search", "search the corpus", func(_ context.Context, in searchIn) (searchOut, error) {
+		return searchOut{Hits: []string{in.Query}}, nil
+	})
+	if tool.Name() != "search" {
+		t.Errorf("Name = %q", tool.Name())
+	}
+	// Schema includes query and the description.
+	if !strings.Contains(string(tool.Schema()), `"query":`) {
+		t.Errorf("schema = %s", tool.Schema())
+	}
+	if !strings.Contains(string(tool.Schema()), `"description":"the search query"`) {
+		t.Errorf("schema = %s", tool.Schema())
+	}
+	out, isErr, transportErr := tool.Invoke(context.Background(), json.RawMessage(`{"query":"hi"}`))
+	if transportErr != nil {
+		t.Fatalf("transportErr: %v", transportErr)
+	}
+	if isErr {
+		t.Errorf("isErr = true, want false")
+	}
+	if string(out) != `{"hits":["hi"]}` {
+		t.Errorf("out = %s", out)
+	}
+}
+
+func TestTool_ArgsUnmarshalFailureBecomesIsError(t *testing.T) {
+	tool := Tool("search", "search", func(_ context.Context, in searchIn) (searchOut, error) {
+		return searchOut{}, nil
+	})
+	// "limit" is int; pass a string to force unmarshal failure.
+	out, isErr, transportErr := tool.Invoke(context.Background(), json.RawMessage(`{"query":"q","limit":"oops"}`))
+	if transportErr != nil {
+		t.Fatalf("transportErr should be nil for args-unmarshal failure, got %v", transportErr)
+	}
+	if !isErr {
+		t.Fatal("isErr = false, want true")
+	}
+	if !strings.Contains(string(out), "limit") {
+		t.Errorf("out should mention the bad field, got %q", out)
+	}
+}
+
+func TestTool_FnErrorBecomesIsError(t *testing.T) {
+	tool := Tool("boom", "always fails", func(_ context.Context, _ searchIn) (searchOut, error) {
+		return searchOut{}, errors.New("backend 503")
+	})
+	out, isErr, transportErr := tool.Invoke(context.Background(), json.RawMessage(`{"query":"x"}`))
+	if transportErr != nil {
+		t.Fatalf("transportErr: %v", transportErr)
+	}
+	if !isErr {
+		t.Fatal("isErr = false, want true")
+	}
+	if string(out) != "backend 503" {
+		t.Errorf("out = %q", out)
+	}
+}
+
+func TestTool_OutMarshalFailureIsTransportErr(t *testing.T) {
+	// Out with a chan field cannot be JSON-marshaled.
+	type badOut struct {
+		Ch chan int
+	}
+	tool := Tool("bad", "returns unmarshalable", func(_ context.Context, _ searchIn) (badOut, error) {
+		return badOut{Ch: make(chan int)}, nil
+	})
+	_, _, transportErr := tool.Invoke(context.Background(), json.RawMessage(`{"query":"x"}`))
+	if transportErr == nil {
+		t.Fatal("expected transportErr from json.Marshal failure")
+	}
+}
+
+func TestTool_PanicsOnNonStructIn(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	Tool("bad", "bad", func(_ context.Context, _ string) (searchOut, error) {
+		return searchOut{}, nil
+	})
+}
