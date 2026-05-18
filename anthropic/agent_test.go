@@ -734,3 +734,16 @@ func TestWithMaxSteps_Overrides(t *testing.T) {
 		t.Errorf("maxSteps = %d, want 3", a.cfg.maxSteps)
 	}
 }
+
+func TestWithTools_CrossCallDuplicatePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on cross-call duplicate tool name")
+		}
+	}()
+	t1 := fugue.RawTool("dup", "first", nil,
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
+	t2 := fugue.RawTool("dup", "second", nil,
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
+	New("claude-sonnet-4-6", WithTools(t1), WithTools(t2))
+}
