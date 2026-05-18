@@ -703,3 +703,34 @@ func TestToAPIMessages_RoleToolIsErrorPropagates(t *testing.T) {
 	}
 	t.Fatal("expected tool_result block with IsError=true")
 }
+
+func TestWithTools_DuplicateNamePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on duplicate tool name")
+		}
+	}()
+	t1 := fugue.RawTool("dup", "first", nil,
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
+	t2 := fugue.RawTool("dup", "second", nil,
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
+	New("claude-sonnet-4-6", WithTools(t1, t2))
+}
+
+func TestWithTools_DefaultMaxStepsIs8WhenToolsPresent(t *testing.T) {
+	tool := fugue.RawTool("noop", "no op", json.RawMessage(`{}`),
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
+	a := New("claude-sonnet-4-6", WithTools(tool)).(*agent)
+	if a.cfg.maxSteps != 8 {
+		t.Errorf("maxSteps = %d, want 8", a.cfg.maxSteps)
+	}
+}
+
+func TestWithMaxSteps_Overrides(t *testing.T) {
+	tool := fugue.RawTool("noop", "no op", json.RawMessage(`{}`),
+		func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) { return nil, nil })
+	a := New("claude-sonnet-4-6", WithTools(tool), WithMaxSteps(3)).(*agent)
+	if a.cfg.maxSteps != 3 {
+		t.Errorf("maxSteps = %d, want 3", a.cfg.maxSteps)
+	}
+}

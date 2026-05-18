@@ -27,6 +27,9 @@ func New(model string, opts ...Option) fugue.Agent {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	if len(cfg.tools) > 0 && cfg.maxSteps == 0 {
+		cfg.maxSteps = 8
+	}
 	if cfg.client == nil {
 		var clientOpts []option.RequestOption
 		if cfg.apiKey != "" {
@@ -47,6 +50,9 @@ type config struct {
 	maxTokens    int
 	temperature  *float64
 	client       *sdk.Client
+	tools        []fugue.ToolDef
+	toolByName   map[string]fugue.ToolDef
+	maxSteps     int
 }
 
 // WithAPIKey sets the API key. Overrides ANTHROPIC_API_KEY from the environment.
